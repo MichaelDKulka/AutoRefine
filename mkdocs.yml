@@ -1,0 +1,106 @@
+site_name: AutoRefine
+site_description: Make your AI smarter with 3 lines of code
+site_url: https://upwell-solutions.github.io/autorefine
+repo_url: https://github.com/upwell-solutions/autorefine
+repo_name: upwell-solutions/autorefine
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.suggest
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Guides:
+    - Feedback Types: feedback-types.md
+    - Custom Refiners: custom-refiners.md
+    - Deployment: deployment.md
+    - Security: security.md
+  - Reference:
+    - Configuration: configuration.md
+    - API Reference: api-reference.md
+    - Architecture: architecture.md
+  - Resources:
+    - FAQ: faq.md
+    - Comparison: comparison.md
+    - Changelog: changelog.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            heading_level: 3
+            docstring_style: google
+            show_signature_annotations: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/upwell-solutions/autorefine
+    - icon: fontawesome/solid/globe
+      link: https://upwelldigitalsolutions.com
+
+extra_css:
+  - assets/extra.css
+
+copyright: >
+  AutoRefine is built and maintained by
+  <a href="https://upwelldigitalsolutions.com" target="_blank">Upwell Digital Solutions</a>
+  — AI consulting, SEO, and software development.

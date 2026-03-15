@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AutoRefine Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
+--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--radius:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+background:var(--bg);color:var(--text);line-height:1.5;min-height:100vh;display:flex;flex-direction:column}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:16px}
+header h1{font-size:20px;font-weight:600}header h1 span{color:var(--accent)}
+header .stats{margin-left:auto;display:flex;gap:20px;font-size:13px;color:var(--muted)}
+header .stats b{color:var(--text)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:24px;flex:1}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.panel-head{padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+.panel-head .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot-green{background:var(--green)}.dot-yellow{background:var(--yellow)}.dot-red{background:var(--red)}.dot-blue{background:var(--accent)}
+.panel-body{padding:18px;max-height:460px;overflow-y:auto}
+.panel-body::-webkit-scrollbar{width:6px}.panel-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.prompt-box{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:14px;font-family:'SF Mono',Consolas,monospace;
+font-size:12.5px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto;line-height:1.6;color:var(--muted)}
+.prompt-meta{display:flex;gap:12px;margin-bottom:10px;font-size:12px;color:var(--muted)}
+.prompt-meta b{color:var(--text)}
+.diff-line{font-family:'SF Mono',Consolas,monospace;font-size:12px;padding:1px 6px}
+.diff-add{background:#1a3a2a;color:var(--green)}.diff-del{background:#3a1a1a;color:var(--red)}
+.diff-hdr{color:var(--accent);font-weight:600;margin-top:8px}
+.fb-item{padding:10px 0;border-bottom:1px solid var(--border);font-size:13px}
+.fb-item:last-child{border-bottom:none}
+.fb-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;text-transform:uppercase}
+.fb-positive{background:#1a3a2a;color:var(--green)}.fb-negative{background:#3a1a1a;color:var(--red)}
+.fb-correction{background:#3a2a1a;color:var(--yellow)}
+.fb-comment{color:var(--muted);font-style:italic;margin-top:4px}
+.fb-time{color:var(--muted);font-size:11px;float:right}
+.ab-bars{display:flex;gap:16px;margin:12px 0}
+.ab-bar{flex:1;text-align:center}
+.ab-bar-fill{height:8px;border-radius:4px;margin:8px auto;max-width:80%}
+.ab-bar label{font-size:12px;color:var(--muted)}
+.ab-bar .score{font-size:24px;font-weight:700}
+.ab-actions{display:flex;gap:8px;margin-top:12px;justify-content:center}
+button{padding:8px 16px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);
+font-size:13px;cursor:pointer;transition:all .15s}
+button:hover{border-color:var(--accent);color:var(--accent)}
+.btn-green{border-color:var(--green);color:var(--green)}.btn-green:hover{background:var(--green);color:#000}
+.btn-red{border-color:var(--red);color:var(--red)}.btn-red:hover{background:var(--red);color:#fff}
+.btn-sm{padding:5px 12px;font-size:12px}
+select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px}
+footer{text-align:center;padding:16px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)}
+.empty{color:var(--muted);font-style:italic;padding:20px;text-align:center}
+.tag{font-size:11px;color:var(--muted);margin-left:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Auto</span>Refine</h1>
+  <div class="stats">
+    <span>Interactions: <b id="h-ix">-</b></span>
+    <span>Feedback: <b id="h-fb">-</b></span>
+    <span>Active: <b id="h-ver">-</b></span>
+    <span>Refiner: <b id="h-cost">-</b></span>
+  </div>
+</header>
+
+<div class="grid">
+  <!-- Panel 1: Improvement Curve -->
+  <div class="panel">
+    <div class="panel-head"><span class="dot dot-green"></span> Improvement Curve</div>
+    <div class="panel-body" style="height:300px"><canvas id="chart"></canvas></div>
+  </div>
+
+  <!-- Panel 2: Active Prompt + Diff -->
+  <div class="panel">
+    <div class="panel-head">
+      <span class="dot dot-yellow"></span> Active Prompt
+      <span class="tag" id="vtag"></span>
+      <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <select id="rb-sel"><option value="">Rollback...</option></select>
+        <button class="btn-sm" onclick="doRollback()">Go</button>
+      </span>
+    </div>
+    <div class="panel-body">
+      <div class="prompt-meta">
+        <span>Version: <b id="pv-v">-</b></span>
+        <span>Changed: <b id="pv-cl">-</b></span>
+      </div>
+      <div class="prompt-box" id="pv-text">Loading...</div>
+      <div id="diff-view" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- Panel 3: Feedback Feed -->
+  <div class="panel">
+    <div class="panel-head">
+      <span class="dot dot-red"></span> Recent Feedback
+      <span style="margin-left:auto">
+        <select id="fb-filter" onchange="loadFB()">
+          <option value="">All types</option>
+          <option value="positive">Positive</option>
+          <option value="negative">Negative</option>
+          <option value="correction">Corrections</option>
+        </select>
+      </span>
+    </div>
+    <div class="panel-body" id="fb-list"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- Panel 4: A/B Test -->
+  <div class="panel">
+    <div class="panel-head"><span class="dot dot-blue"></span> A/B Test Status</div>
+    <div class="panel-body" id="ab-panel"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<footer>
+  AutoRefine v0.1.0 &mdash; Built by <a href="https://upwelldigitalsolutions.com" target="_blank" rel="noopener">Upwell Digital Solutions</a>
+</footer>
+
+<script>
+let C=null;
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+async function get(p){return(await fetch(p)).json()}
+async function post(p){return(await fetch(p,{method:'POST'})).json()}
+
+// ── Analytics + Chart ─────────────────────────────────
+async function loadAnalytics(){
+  const d=await get('/api/analytics?days=30');
+  $('h-ix').textContent=d.total_interactions;
+  $('h-fb').textContent=d.total_feedback;
+  $('h-ver').textContent='v'+d.active_version;
+  $('h-cost').textContent='$'+d.refiner_cost.toFixed(2);
+
+  const curve=d.improvement_curve||[];
+  const daily=d.daily_scores||[];
+  if(C)C.destroy();
+  const ctx=$('chart').getContext('2d');
+  const ds=[];
+  if(curve.length)ds.push({
+    label:'Score by Version',type:'bar',
+    data:curve.map(p=>p.score),
+    backgroundColor:'rgba(88,166,255,0.25)',borderColor:'#58a6ff',borderWidth:1,order:2
+  });
+  if(daily.length)ds.push({
+    label:'Daily Avg',type:'line',
+    data:daily.map(p=>p.avg_score),
+    borderColor:'#3fb950',backgroundColor:'rgba(63,185,80,0.08)',
+    fill:true,tension:0.3,pointRadius:2,order:1
+  });
+  const labels=curve.length?curve.map(p=>'v'+p.version):daily.map(p=>p.date);
+  C=new Chart(ctx,{
+    type:'bar',
+    data:{labels,datasets:ds},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#8b949e',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'#21262d'}},
+        y:{min:-1,max:1,ticks:{color:'#8b949e',font:{size:10},stepSize:0.5},grid:{color:'#21262d'}}
+      }
+    }
+  });
+}
+
+// ── Prompt Viewer ─────────────────────────────────────
+async function loadPrompt(){
+  const d=await get('/api/prompts');
+  const v=d.active_version;
+  $('pv-v').textContent='v'+v;
+  $('vtag').textContent='v'+v;
+  $('pv-text').textContent=d.active_prompt||'(no prompt set)';
+  const cur=d.versions?.find(x=>x.version===v);
+  $('pv-cl').textContent=cur?cur.changelog:'-';
+
+  const sel=$('rb-sel');
+  sel.innerHTML='<option value="">Rollback...</option>';
+  (d.versions||[]).forEach(pv=>{
+    if(pv.version!==v){
+      const o=document.createElement('option');
+      o.value=pv.version;
+      o.textContent='v'+pv.version+(pv.changelog?' — '+pv.changelog.substring(0,35):'');
+      sel.appendChild(o);
+    }
+  });
+
+  const hist=await get('/api/prompts/'+d.prompt_key+'/history');
+  const h=hist.find(x=>x.version===v);
+  const dv=$('diff-view');
+  if(h&&h.diff){
+    dv.innerHTML=h.diff.split('\n').map(l=>{
+      if(l.startsWith('+++')||l.startsWith('---')||l.startsWith('@@'))
+        return '<div class="diff-line diff-hdr">'+esc(l)+'</div>';
+      if(l.startsWith('+'))return '<div class="diff-line diff-add">'+esc(l)+'</div>';
+      if(l.startsWith('-'))return '<div class="diff-line diff-del">'+esc(l)+'</div>';
+      return '<div class="diff-line">'+esc(l)+'</div>';
+    }).join('');
+  }else{dv.innerHTML='';}
+}
+
+async function doRollback(){
+  const v=$('rb-sel').value;
+  if(!v||!confirm('Roll back to v'+v+'?'))return;
+  const d=await get('/api/prompts');
+  await post('/api/prompts/'+d.prompt_key+'/rollback/'+v);
+  loadPrompt();loadAnalytics();
+}
+
+// ── Feedback Feed ─────────────────────────────────────
+async function loadFB(){
+  const f=$('fb-filter').value;
+  let url='/api/feedback?limit=30';
+  if(f)url+='&signal_type='+f;
+  const d=await get(url);
+  const el=$('fb-list');
+  if(!d.items||!d.items.length){el.innerHTML='<div class="empty">No feedback yet</div>';return;}
+  el.innerHTML=d.items.map(fb=>{
+    const cls=fb.type==='positive'?'fb-positive':fb.type==='negative'?'fb-negative':'fb-correction';
+    const t=new Date(fb.created_at).toLocaleString();
+    return `<div class="fb-item">
+      <span class="fb-badge ${cls}">${fb.type}</span>
+      <span style="margin-left:8px">${fb.score>0?'+':''}${fb.score.toFixed(1)}</span>
+      <span class="fb-time">${t}</span>
+      ${fb.comment?'<div class="fb-comment">"'+esc(fb.comment)+'"</div>':''}
+      ${fb.correction?'<div class="fb-comment">Preferred: "'+esc(fb.correction)+'"</div>':''}
+    </div>`;
+  }).join('');
+}
+
+// ── A/B Test Panel ────────────────────────────────────
+async function loadAB(){
+  const d=await get('/api/ab-tests');
+  const el=$('ab-panel');
+  if(!d.active||!d.test){el.innerHTML='<div class="empty">No active A/B test</div>';return;}
+  const t=d.test;
+  const champClr=t.champion_score>=t.candidate_score?'var(--green)':'var(--muted)';
+  const candClr=t.candidate_score>t.champion_score?'var(--green)':'var(--muted)';
+  el.innerHTML=`
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">
+      Champion v${t.champion_version} vs Candidate v${t.candidate_version}
+      &mdash; ${Math.round(t.split_ratio*100)}% candidate traffic
+    </div>
+    <div class="ab-bars">
+      <div class="ab-bar">
+        <label>Champion v${t.champion_version}</label>
+        <div class="score" style="color:${champClr}">${t.champion_score>=0?'+':''}${t.champion_score.toFixed(3)}</div>
+        <div class="ab-bar-fill" style="background:${champClr}"></div>
+        <label>${t.champion_interactions} samples</label>
+      </div>
+      <div class="ab-bar">
+        <label>Candidate v${t.candidate_version}</label>
+        <div class="score" style="color:${candClr}">${t.candidate_score>=0?'+':''}${t.candidate_score.toFixed(3)}</div>
+        <div class="ab-bar-fill" style="background:${candClr}"></div>
+        <label>${t.candidate_interactions} samples</label>
+      </div>
+    </div>
+    <div class="ab-actions">
+      <button class="btn-green" onclick="abAct('promote','${t.id}')">Promote Candidate</button>
+      <button class="btn-red" onclick="abAct('reject','${t.id}')">Reject Candidate</button>
+    </div>`;
+}
+
+async function abAct(action,id){
+  if(!confirm(action.charAt(0).toUpperCase()+action.slice(1)+' this candidate?'))return;
+  const d=await get('/api/prompts');
+  await post('/api/ab-tests/'+d.prompt_key+'/'+action+'?test_id='+id);
+  loadAB();loadPrompt();loadAnalytics();
+}
+
+// ── Boot ──────────────────────────────────────────────
+(async()=>{
+  await Promise.all([loadAnalytics(),loadPrompt(),loadFB(),loadAB()]);
+  setInterval(()=>{loadAnalytics();loadFB();loadAB()},15000);
+})();
+</script>
+</body>
+</html>

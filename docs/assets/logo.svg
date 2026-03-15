@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 80" fill="none">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a237e"/>
+      <stop offset="50%" stop-color="#3949ab"/>
+      <stop offset="100%" stop-color="#00897b"/>
+    </linearGradient>
+  </defs>
+  <!-- Loop icon -->
+  <path d="M30 40c0-11 9-20 20-20h4l-6-6 3-3 12 12-12 12-3-3 6-6h-4c-8.3 0-15 6.7-15 15s6.7 15 15 15h4l-6 6 3 3 12-12-12-12-3 3 6 6h-4c-11 0-20-9-20-20z" fill="url(#g)" opacity="0.8"/>
+  <!-- Text -->
+  <text x="75" y="52" font-family="Inter, -apple-system, sans-serif" font-size="36" font-weight="700" fill="url(#g)">Auto<tspan fill="#00897b">Refine</tspan></text>
+</svg>

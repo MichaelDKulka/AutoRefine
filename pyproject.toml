@@ -1,0 +1,107 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autorefine"
+dynamic = ["version"]
+description = "Make any AI app progressively smarter with automatic prompt refinement"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Upwell Digital Solutions", email = "hello@upwelldigitalsolutions.com"},
+]
+keywords = [
+    "llm", "prompt-engineering", "ai", "machine-learning",
+    "prompt-optimization", "feedback", "refinement", "a-b-testing",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Framework :: Pydantic :: 2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+# Core dependencies — kept minimal
+dependencies = [
+    "httpx>=0.25.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "click>=8.0.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0.0"]
+anthropic = ["anthropic>=0.30.0"]
+mistral = ["mistralai>=0.0.7"]
+dashboard = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0"]
+postgres = ["asyncpg>=0.28.0"]
+rich = ["rich>=13.0.0"]
+encryption = ["cryptography>=41.0.0"]
+all = [
+    "autorefine[openai,anthropic,mistral,dashboard,postgres,rich,encryption]",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+]
+
+[project.scripts]
+autorefine = "autorefine.cli:main"
+
+[project.urls]
+Homepage = "https://upwelldigitalsolutions.com/autorefine"
+Documentation = "https://github.com/upwell-solutions/autorefine#readme"
+Repository = "https://github.com/upwell-solutions/autorefine"
+Issues = "https://github.com/upwell-solutions/autorefine/issues"
+Changelog = "https://github.com/upwell-solutions/autorefine/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = {attr = "autorefine.__version__.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["autorefine*"]
+
+[tool.setuptools.package-data]
+autorefine = ["py.typed", "dashboard/templates/*.html"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "UP007",  # X | Y union syntax (we use it, but need 3.9 compat in some places)
+    "SIM108", # ternary — readability preference
+    "B008",   # function call in default arg (click uses this pattern)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autorefine"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

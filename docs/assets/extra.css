@@ -1,0 +1,37 @@
+/* Upwell Digital Solutions brand overrides */
+:root {
+  --md-primary-fg-color: #1a237e;
+  --md-primary-fg-color--light: #3949ab;
+  --md-primary-fg-color--dark: #0d1257;
+  --md-accent-fg-color: #00897b;
+}
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #3949ab;
+  --md-accent-fg-color: #26a69a;
+}
+
+/* Termynal terminal animation */
+.termynal {
+  background: #0d1117;
+  color: #e6edf3;
+  border-radius: 8px;
+  padding: 16px 20px;
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 16px 0;
+  overflow-x: auto;
+}
+.termynal .comment { color: #8b949e; }
+.termynal .command::before { content: "$ "; color: #3fb950; }
+.termynal .output { color: #8b949e; }
+.termynal .highlight { color: #58a6ff; }
+
+/* Hero section */
+.hero { text-align: center; padding: 48px 0 32px; }
+.hero h1 { font-size: 2.4rem; margin-bottom: 8px; }
+.hero p { font-size: 1.15rem; color: var(--md-default-fg-color--light); max-width: 600px; margin: 0 auto 24px; }
+.hero-buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.hero-buttons a { padding: 10px 24px; border-radius: 6px; font-weight: 600; text-decoration: none; }
+.hero-buttons .primary { background: var(--md-primary-fg-color); color: #fff; }
+.hero-buttons .secondary { border: 2px solid var(--md-primary-fg-color); color: var(--md-primary-fg-color); }
