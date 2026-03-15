@@ -25,6 +25,7 @@ from autorefine.cost_tracker import CostTracker
 from autorefine.exceptions import RollbackError
 from autorefine.feedback import FeedbackCollector
 from autorefine.feedback_filter import FeedbackFilter
+from autorefine.feedback_provider import FeedbackProvider
 from autorefine.interceptor import Interceptor
 from autorefine.models import CompletionResponse, FeedbackSignal, Message, PromptVersion
 from autorefine.notifications import PromptChangeEvent, PromptChangeNotifier
@@ -55,6 +56,7 @@ class AsyncAutoRefine:
         store: BaseStore | None = None,
         on_refine: Callable | None = None,
         on_prompt_change: Callable | None = None,
+        feedback_provider: FeedbackProvider | None = None,
         **config_overrides: Any,
     ) -> None:
         cfg = AutoRefineSettings(
@@ -95,6 +97,7 @@ class AsyncAutoRefine:
             on_ready=self._sync_run_refinement if cfg.auto_learn else None)
         self._analytics = Analytics(self._store, prompt_key)
         self._on_refine = on_refine
+        self._feedback_provider = feedback_provider
 
     # ── Async LLM calls ──────────────────────────────────────────────
 
@@ -126,6 +129,32 @@ class AsyncAutoRefine:
         """Async feedback recording."""
         return await self._feedback.async_submit(
             interaction_id=response_id, signal=signal, comment=comment or "", **kw)
+
+    async def collect_feedback(self, response: CompletionResponse) -> FeedbackSignal | None:
+        """Collect feedback using the configured :class:`FeedbackProvider`.
+
+        Calls the provider's :meth:`~FeedbackProvider.get_feedback` in a
+        thread (since providers may block on I/O), classifies the result,
+        and records it.  Returns ``None`` if no provider is configured or
+        the user provided an empty string.
+
+        Args:
+            response: The :class:`CompletionResponse` from a chat/complete call.
+
+        Returns:
+            The recorded :class:`FeedbackSignal`, or ``None`` if skipped.
+        """
+        if self._feedback_provider is None:
+            return None
+
+        text = await asyncio.to_thread(
+            self._feedback_provider.get_feedback, response.id, response.text)
+        if not text or not text.strip():
+            return None
+
+        signal = self._feedback_provider.classify(text)
+        return await self._feedback.async_submit(
+            interaction_id=response.id, signal=signal, comment=text)
 
     # ── Prompt management (thin async wrappers) ──────────────────────
 

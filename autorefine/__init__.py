@@ -30,6 +30,7 @@ from autorefine.async_client import AsyncAutoRefine
 from autorefine.client import AutoRefine
 from autorefine.feedback import FeedbackBundle, FeedbackCollector
 from autorefine.feedback_filter import FeedbackFilter
+from autorefine.feedback_provider import FeedbackProvider
 from autorefine.models import (
     CompletionResponse,
     FeedbackSignal,
@@ -155,6 +156,7 @@ __all__ = [
     "CompletionResponse",
     "FeedbackBundle",
     "FeedbackCollector",
+    "FeedbackProvider",
     "FeedbackWidget",
     "FeedbackFilter",
     "FeedbackSignal",

@@ -86,7 +86,7 @@ class AutoRefineSettings(BaseSettings):
     # -- Refinement tuning ---------------------------------------------------
 
     refine_threshold: int = Field(
-        default=20,
+        default=10,
         ge=1,
         description=(
             "Minimum number of unprocessed feedback signals required before "

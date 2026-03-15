@@ -14,6 +14,7 @@ from autorefine.cost_tracker import CostTracker
 from autorefine.exceptions import RollbackError
 from autorefine.feedback import FeedbackCollector
 from autorefine.feedback_filter import FeedbackFilter
+from autorefine.feedback_provider import FeedbackProvider
 from autorefine.interceptor import Interceptor
 from autorefine.models import CompletionResponse, FeedbackSignal, Message, PromptVersion
 from autorefine.notifications import PromptChangeEvent, PromptChangeNotifier
@@ -35,6 +36,7 @@ class AutoRefine:
                  store: BaseStore | None = None,
                  on_refine: Callable | None = None,
                  on_prompt_change: Callable | None = None,
+                 feedback_provider: FeedbackProvider | None = None,
                  **config_overrides: Any) -> None:
         cfg = AutoRefineSettings(
             api_key=api_key, model=model, refiner_key=refiner_key,
@@ -74,6 +76,7 @@ class AutoRefine:
             on_ready=self._run_refinement if cfg.auto_learn else None)
         self._analytics = Analytics(self._store, prompt_key)
         self._on_refine = on_refine
+        self._feedback_provider = feedback_provider
 
     # ── LLM calls ────────────────────────────────────────────────────
 
@@ -105,6 +108,33 @@ class AutoRefine:
         """Record feedback for a response."""
         return self._feedback.submit(
             interaction_id=response_id, signal=signal, comment=comment or "", **kw)
+
+    def collect_feedback(self, response: CompletionResponse) -> FeedbackSignal | None:
+        """Collect feedback using the configured :class:`FeedbackProvider`.
+
+        Calls the provider's :meth:`~FeedbackProvider.get_feedback` to obtain
+        a feedback string from the end-user, classifies it as positive or
+        negative, and records it.  Returns ``None`` if no provider is
+        configured or the user provided an empty string (skipped).
+
+        Args:
+            response: The :class:`CompletionResponse` returned by
+                :meth:`chat`, :meth:`complete`, or :meth:`stream`.
+
+        Returns:
+            The recorded :class:`FeedbackSignal`, or ``None`` if skipped.
+        """
+        if self._feedback_provider is None:
+            logger.debug("No feedback provider configured — skipping collection")
+            return None
+
+        text = self._feedback_provider.get_feedback(response.id, response.text)
+        if not text or not text.strip():
+            return None
+
+        signal = self._feedback_provider.classify(text)
+        return self._feedback.submit(
+            interaction_id=response.id, signal=signal, comment=text)
 
     # ── Prompt management ────────────────────────────────────────────
 
