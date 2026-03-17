@@ -25,9 +25,12 @@ from autorefine.cost_tracker import CostTracker
 from autorefine.exceptions import RollbackError
 from autorefine.feedback import FeedbackCollector
 from autorefine.feedback_filter import FeedbackFilter
+from autorefine.dimensions import FeedbackDimensionSchema
+from autorefine.directives import DirectiveManager, RefinementDirectives
 from autorefine.feedback_provider import FeedbackProvider
 from autorefine.interceptor import Interceptor
-from autorefine.models import CompletionResponse, FeedbackSignal, Message, PromptVersion
+from autorefine.models import CompletionResponse, FeedbackSignal, FeedbackType, Message, PromptVersion
+from autorefine.outcomes import OutcomeTranslator
 from autorefine.notifications import PromptChangeEvent, PromptChangeNotifier
 from autorefine.pii_scrubber import PIIScrubber
 from autorefine.providers import get_provider
@@ -57,6 +60,7 @@ class AsyncAutoRefine:
         on_refine: Callable | None = None,
         on_prompt_change: Callable | None = None,
         feedback_provider: FeedbackProvider | None = None,
+        feedback_dimensions: dict[str, dict[str, Any]] | None = None,
         **config_overrides: Any,
     ) -> None:
         cfg = AutoRefineSettings(
@@ -81,20 +85,39 @@ class AsyncAutoRefine:
         fb_filter = FeedbackFilter(enabled=cfg.feedback_filter_enabled)
         self._notifier = PromptChangeNotifier(webhook_url=cfg.webhook_url, on_prompt_change=on_prompt_change)
 
+        # ── Dimensions ──
+        self._dimension_schema: FeedbackDimensionSchema | None = None
+        if feedback_dimensions:
+            self._dimension_schema = FeedbackDimensionSchema.from_dict(
+                prompt_key, feedback_dimensions
+            )
+            self._store.save_dimension_schema(self._dimension_schema)
+
+        # ── Directives manager ──
+        self._directive_manager = DirectiveManager(self._store)
+
+        # ── Outcome translator ──
+        self._outcome_translator = OutcomeTranslator(
+            dimension_schema=self._dimension_schema
+        )
+
         self._refiner: Refiner | None = None
         self._ab: ABTestManager | None = None
         if cfg.refiner_key:
             self._refiner = Refiner(
                 refiner_provider=get_provider(cfg.refiner_provider, api_key=cfg.refiner_key, model=cfg.refiner_model),
                 store=self._store, prompt_key=prompt_key, batch_size=cfg.refine_batch_size,
-                cost_limit=cfg.cost_limit_monthly, pii_scrubber=scrubber, feedback_filter=fb_filter)
+                cost_limit=cfg.cost_limit_monthly, pii_scrubber=scrubber, feedback_filter=fb_filter,
+                dimension_schema=self._dimension_schema,
+                directive_manager=self._directive_manager)
             self._ab = ABTestManager(
                 store=self._store, prompt_key=prompt_key,
                 split_ratio=cfg.ab_test_split, min_interactions=cfg.ab_test_min_interactions)
 
         self._feedback = FeedbackCollector(
             store=self._store, prompt_key=prompt_key, refine_threshold=cfg.refine_threshold,
-            on_ready=self._sync_run_refinement if cfg.auto_learn else None)
+            on_ready=self._sync_run_refinement if cfg.auto_learn else None,
+            dimension_schema=self._dimension_schema)
         self._analytics = Analytics(self._store, prompt_key)
         self._on_refine = on_refine
         self._feedback_provider = feedback_provider
@@ -124,11 +147,22 @@ class AsyncAutoRefine:
 
     # ── Async feedback ───────────────────────────────────────────────
 
-    async def feedback(self, response_id: str, signal: str,
-                       comment: str | None = None, **kw: Any) -> FeedbackSignal:
-        """Async feedback recording."""
+    async def feedback(self, response_id: str, signal: str = "",
+                       comment: str | None = None,
+                       dimensions: dict[str, float] | None = None,
+                       context: dict[str, Any] | None = None,
+                       **kw: Any) -> FeedbackSignal:
+        """Async feedback recording with optional dimensions/context."""
+        if not signal and dimensions:
+            if self._dimension_schema:
+                composite = self._dimension_schema.compute_composite(dimensions)
+            else:
+                composite = sum(dimensions.values()) / len(dimensions)
+            signal = "positive" if composite >= 0 else "negative"
+
         return await self._feedback.async_submit(
-            interaction_id=response_id, signal=signal, comment=comment or "", **kw)
+            interaction_id=response_id, signal=signal or "positive",
+            comment=comment or "", dimensions=dimensions, context=context, **kw)
 
     async def collect_feedback(self, response: CompletionResponse) -> FeedbackSignal | None:
         """Collect feedback using the configured :class:`FeedbackProvider`.
@@ -155,6 +189,62 @@ class AsyncAutoRefine:
         signal = self._feedback_provider.classify(text)
         return await self._feedback.async_submit(
             interaction_id=response.id, signal=signal, comment=text)
+
+    # ── Refinement directives ────────────────────────────────────────
+
+    async def set_refinement_directives(
+        self, prompt_key: str = "",
+        directives: list[str] | None = None,
+        domain_context: str | None = None,
+        preserve_behaviors: list[str] | None = None,
+    ) -> RefinementDirectives:
+        key = prompt_key or self._prompt_key
+        return await asyncio.to_thread(
+            self._directive_manager.set, key,
+            directives=directives, domain_context=domain_context,
+            preserve_behaviors=preserve_behaviors,
+        )
+
+    async def update_refinement_directives(
+        self, prompt_key: str = "",
+        add_directives: list[str] | None = None,
+        remove_directives: list[str] | None = None,
+        domain_context: str | None = None,
+        preserve_behaviors: list[str] | None = None,
+    ) -> RefinementDirectives:
+        key = prompt_key or self._prompt_key
+        return await asyncio.to_thread(
+            self._directive_manager.update, key,
+            add_directives=add_directives,
+            remove_directives=remove_directives,
+            domain_context=domain_context,
+            preserve_behaviors=preserve_behaviors,
+        )
+
+    # ── Outcome-based feedback ────────────────────────────────────────
+
+    async def report_outcome(
+        self, response_id: str, outcome: dict[str, Any],
+        dimension_overrides: dict[str, float] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> FeedbackSignal | None:
+        """Async report_outcome."""
+        def _sync() -> FeedbackSignal | None:
+            ix = self._store.get_interaction(response_id)
+            if ix is None:
+                return None
+            dim_scores = self._outcome_translator.translate(
+                outcome, dimension_overrides=dimension_overrides, interaction=ix)
+            fb_context = dict(context or {})
+            fb_context.update({k: v for k, v in outcome.items()
+                               if k in ("predicted", "actual", "correct")})
+            correct = outcome.get("correct", False)
+            signal = "positive" if correct else "negative"
+            return self._feedback.submit(
+                interaction_id=response_id, signal=signal,
+                dimensions=dim_scores, context=fb_context,
+                metadata={"feedback_source": "outcome"})
+        return await asyncio.to_thread(_sync)
 
     # ── Prompt management (thin async wrappers) ──────────────────────
 

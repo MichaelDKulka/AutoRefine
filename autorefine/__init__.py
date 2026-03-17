@@ -30,6 +30,8 @@ from autorefine.async_client import AsyncAutoRefine
 from autorefine.client import AutoRefine
 from autorefine.feedback import FeedbackBundle, FeedbackCollector
 from autorefine.feedback_filter import FeedbackFilter
+from autorefine.dimensions import FeedbackDimension, FeedbackDimensionSchema
+from autorefine.directives import RefinementDirectives
 from autorefine.feedback_provider import FeedbackProvider
 from autorefine.models import (
     CompletionResponse,
@@ -39,6 +41,7 @@ from autorefine.models import (
     PromptVersion,
 )
 from autorefine.notifications import PromptChangeEvent, PromptChangeNotifier
+from autorefine.outcomes import OutcomeTranslator
 from autorefine.pii_scrubber import PIIScrubber
 from autorefine.widget import FeedbackWidget
 
@@ -156,16 +159,20 @@ __all__ = [
     "CompletionResponse",
     "FeedbackBundle",
     "FeedbackCollector",
+    "FeedbackDimension",
+    "FeedbackDimensionSchema",
     "FeedbackProvider",
     "FeedbackWidget",
     "FeedbackFilter",
     "FeedbackSignal",
     "FeedbackType",
     "Message",
+    "OutcomeTranslator",
     "PIIScrubber",
     "PromptChangeEvent",
     "PromptChangeNotifier",
     "PromptVersion",
+    "RefinementDirectives",
     "__version__",
     "autorefine",
 ]

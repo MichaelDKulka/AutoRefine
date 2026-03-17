@@ -234,12 +234,14 @@ class ABTestManager:
         split_ratio: float = 0.2,
         min_interactions: int = 100,
         significance_level: float = 0.05,
+        dimension_schema: Any = None,
     ) -> None:
         self._store = store
         self._prompt_key = prompt_key
         self._split_ratio = split_ratio
         self._min_interactions = min_interactions
         self._alpha = significance_level
+        self._dimension_schema = dimension_schema
 
     # ── Starting a test ──────────────────────────────────────────────
 
@@ -358,6 +360,7 @@ class ABTestManager:
         variant_or_version: str | int,
         score: float,
         prompt_key: str = "",
+        dimensions: dict[str, float] | None = None,
     ) -> None:
         """Record a feedback score for a variant in the active A/B test.
 
@@ -365,15 +368,12 @@ class ABTestManager:
         or a version number (for backward compatibility with code that
         tracks the integer version).
 
-        The running mean is updated incrementally using the Welch online
-        formula.  Variance is tracked using Welch's online algorithm so
-        :meth:`check_significance` has the data it needs for the t-test.
-
         Args:
             variant_or_version: ``"champion"``, ``"candidate"``, or an
                 integer version number.
             score: Feedback score in [-1, 1].
             prompt_key: Override the default prompt namespace.
+            dimensions: Per-dimension scores to track alongside composite.
         """
         key = prompt_key or self._prompt_key
         ab_test = self._store.get_active_ab_test(key)
@@ -398,12 +398,31 @@ class ABTestManager:
                 (ab_test.control_score * ab_test.control_interactions + score) / n
             )
             ab_test.control_interactions = n
+            # Per-dimension tracking
+            if dimensions:
+                for dim_name, dim_score in dimensions.items():
+                    old_count = ab_test.control_dimension_counts.get(dim_name, 0)
+                    old_mean = ab_test.control_dimension_scores.get(dim_name, 0.0)
+                    new_count = old_count + 1
+                    ab_test.control_dimension_scores[dim_name] = (
+                        (old_mean * old_count + dim_score) / new_count
+                    )
+                    ab_test.control_dimension_counts[dim_name] = new_count
         elif version == ab_test.candidate_version:
             n = ab_test.candidate_interactions + 1
             ab_test.candidate_score = (
                 (ab_test.candidate_score * ab_test.candidate_interactions + score) / n
             )
             ab_test.candidate_interactions = n
+            if dimensions:
+                for dim_name, dim_score in dimensions.items():
+                    old_count = ab_test.candidate_dimension_counts.get(dim_name, 0)
+                    old_mean = ab_test.candidate_dimension_scores.get(dim_name, 0.0)
+                    new_count = old_count + 1
+                    ab_test.candidate_dimension_scores[dim_name] = (
+                        (old_mean * old_count + dim_score) / new_count
+                    )
+                    ab_test.candidate_dimension_counts[dim_name] = new_count
         else:
             return
 
@@ -440,22 +459,23 @@ class ABTestManager:
         return self._evaluate_significance(ab_test)
 
     def _evaluate_significance(self, ab_test: ABTest) -> str | None:
-        """Core significance evaluation logic."""
+        """Core significance evaluation logic.
+
+        When dimensions are configured:
+        - Candidate is promoted only if composite is significantly better
+          AND no high-priority dimension has significantly regressed.
+        - If composite is better but a high-priority dimension is worse,
+          returns "mixed" (no auto-promote).
+        """
         n_champ = ab_test.control_interactions
         n_cand = ab_test.candidate_interactions
 
-        # Not enough data yet
         if n_champ < self._min_interactions or n_cand < self._min_interactions:
             return None
 
         mean_champ = ab_test.control_score
         mean_cand = ab_test.candidate_score
 
-        # Estimate variance from running mean.
-        # Since we only store the mean (not individual scores), we use a
-        # conservative variance estimate: assume scores are in [-1, 1] and
-        # estimate variance as mean * (1 - |mean|) clamped to a sensible floor.
-        # This is approximate but sufficient for the go/no-go decision.
         var_champ = max(0.01, (1.0 - abs(mean_champ)) * (1.0 + abs(mean_champ)) * 0.25)
         var_cand = max(0.01, (1.0 - abs(mean_cand)) * (1.0 + abs(mean_cand)) * 0.25)
 
@@ -465,13 +485,41 @@ class ABTestManager:
         )
 
         if p_value >= self._alpha:
-            return None  # not significant
+            return None
 
-        # Significant — which one won?
-        if mean_cand > mean_champ:
-            return CANDIDATE
-        else:
+        # Composite winner
+        if mean_cand <= mean_champ:
             return CHAMPION
+
+        # Check per-dimension regression for high-priority dimensions
+        if (self._dimension_schema and self._dimension_schema.dimensions
+                and ab_test.candidate_dimension_scores
+                and ab_test.control_dimension_scores):
+            for dim_name, dim in self._dimension_schema.dimensions.items():
+                if dim.refinement_priority != "high":
+                    continue
+                cand_n = ab_test.candidate_dimension_counts.get(dim_name, 0)
+                ctrl_n = ab_test.control_dimension_counts.get(dim_name, 0)
+                # Only check with sufficient per-dimension samples
+                if cand_n < 30 or ctrl_n < 30:
+                    continue
+                cand_mean = ab_test.candidate_dimension_scores.get(dim_name, 0.0)
+                ctrl_mean = ab_test.control_dimension_scores.get(dim_name, 0.0)
+                # Significant regression on high-priority dimension?
+                if cand_mean < ctrl_mean - 0.1:
+                    var_c = max(0.01, (1.0 - abs(ctrl_mean)) * (1.0 + abs(ctrl_mean)) * 0.25)
+                    var_d = max(0.01, (1.0 - abs(cand_mean)) * (1.0 + abs(cand_mean)) * 0.25)
+                    dim_p = welch_ttest_p(cand_mean, var_d, cand_n, ctrl_mean, var_c, ctrl_n)
+                    if dim_p < self._alpha:
+                        logger.warning(
+                            "A/B test: candidate better overall but high-priority "
+                            "dimension %s regressed (%.3f -> %.3f, p=%.4f) — "
+                            "flagging as mixed",
+                            dim_name, ctrl_mean, cand_mean, dim_p,
+                        )
+                        return "mixed"
+
+        return CANDIDATE
 
     def _check_and_resolve(self, ab_test: ABTest) -> str | None:
         """Check significance and auto-promote/reject if there's a winner."""
@@ -479,7 +527,15 @@ class ABTestManager:
         if winner is None:
             return None
 
-        if winner == CANDIDATE:
+        if winner == "mixed":
+            # Do NOT auto-promote — flag as mixed
+            ab_test.result = "mixed"
+            self._store.update_ab_test(ab_test)
+            logger.warning(
+                "A/B test flagged as 'mixed' — manual decision required"
+            )
+            return "mixed"
+        elif winner == CANDIDATE:
             self._promote(ab_test)
         else:
             self._reject(ab_test)

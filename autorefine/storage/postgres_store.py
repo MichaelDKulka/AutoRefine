@@ -211,6 +211,47 @@ class PostgresStore(BaseStore):
         )
         async with self._pool.acquire() as conn:
             await conn.execute(SCHEMA)
+            await self._migrate(conn)
+
+    async def _migrate(self, conn: Any) -> None:
+        """Add columns/tables introduced after the initial schema."""
+        # feedback.dimensions and feedback.context
+        for col, default in [("dimensions", "'{}'"), ("context", "'{}'" )]:
+            try:
+                await conn.execute(
+                    f"ALTER TABLE feedback ADD COLUMN {col} JSONB DEFAULT {default}"
+                )
+            except Exception:
+                pass  # column already exists
+        # refinement_directives table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS refinement_directives (
+                prompt_key         TEXT PRIMARY KEY,
+                directives         JSONB DEFAULT '[]',
+                domain_context     TEXT DEFAULT '',
+                preserve_behaviors JSONB DEFAULT '[]',
+                version            INTEGER DEFAULT 1,
+                created_at         TIMESTAMPTZ NOT NULL,
+                updated_at         TIMESTAMPTZ NOT NULL
+            )
+        """)
+        # dimension_schemas table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS dimension_schemas (
+                prompt_key  TEXT PRIMARY KEY,
+                schema_json JSONB NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL
+            )
+        """)
+        # ab_tests per-dimension columns
+        for col in ("control_dimension_scores", "candidate_dimension_scores",
+                     "control_dimension_counts", "candidate_dimension_counts"):
+            try:
+                await conn.execute(
+                    f"ALTER TABLE ab_tests ADD COLUMN {col} JSONB DEFAULT '{{}}'"
+                )
+            except Exception:
+                pass
 
     async def close(self) -> None:
         """Close the connection pool."""
@@ -290,6 +331,18 @@ class PostgresStore(BaseStore):
     def get_monthly_refiner_cost(self) -> float:
         return _run_sync(self.async_get_monthly_refiner_cost())
 
+    def save_refinement_directives(self, directives: Any) -> None:
+        _run_sync(self.async_save_refinement_directives(directives))
+
+    def get_refinement_directives(self, prompt_key: str) -> Any:
+        return _run_sync(self.async_get_refinement_directives(prompt_key))
+
+    def save_dimension_schema(self, schema: Any) -> None:
+        _run_sync(self.async_save_dimension_schema(schema))
+
+    def get_dimension_schema(self, prompt_key: str) -> Any:
+        return _run_sync(self.async_get_dimension_schema(prompt_key))
+
     def purge_old_data(self, before: datetime) -> int:
         return _run_sync(self.async_purge_old_data(before))
 
@@ -363,14 +416,16 @@ class PostgresStore(BaseStore):
                 """INSERT INTO feedback
                    (id, interaction_id, feedback_type, score, confidence,
                     comment, correction, user_id, processed, created_at,
-                    metadata)
+                    metadata, dimensions, context)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,FALSE,
-                           $9::timestamptz,$10::jsonb)
+                           $9::timestamptz,$10::jsonb,$11::jsonb,$12::jsonb)
                    ON CONFLICT (id) DO NOTHING""",
                 data["id"], data["interaction_id"], data["feedback_type"],
                 data["score"], data["confidence"], data["comment"],
                 data["correction"], data["user_id"], data["created_at"],
                 json.dumps(data["metadata"]),
+                json.dumps(data.get("dimensions", {})),
+                json.dumps(data.get("context", {})),
             )
 
     async def async_get_feedback(
@@ -589,6 +644,77 @@ class PostgresStore(BaseStore):
                 month_start,
             )
         return float(row["total"]) if row else 0.0
+
+    # ── Refinement directives ────────────────────────────────────────
+
+    async def async_save_refinement_directives(self, directives: Any) -> None:
+        pool = self._require_pool()
+        data = directives.model_dump(mode="json") if hasattr(directives, "model_dump") else directives
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO refinement_directives
+                   (prompt_key, directives, domain_context, preserve_behaviors,
+                    version, created_at, updated_at)
+                   VALUES ($1, $2::jsonb, $3, $4::jsonb, $5,
+                           $6::timestamptz, $7::timestamptz)
+                   ON CONFLICT (prompt_key) DO UPDATE SET
+                    directives = EXCLUDED.directives,
+                    domain_context = EXCLUDED.domain_context,
+                    preserve_behaviors = EXCLUDED.preserve_behaviors,
+                    version = EXCLUDED.version,
+                    updated_at = EXCLUDED.updated_at""",
+                data["prompt_key"],
+                json.dumps(data.get("directives", [])),
+                data.get("domain_context", ""),
+                json.dumps(data.get("preserve_behaviors", [])),
+                data.get("version", 1),
+                data.get("created_at", _utc_now().isoformat()),
+                data.get("updated_at", _utc_now().isoformat()),
+            )
+
+    async def async_get_refinement_directives(self, prompt_key: str) -> Any:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM refinement_directives WHERE prompt_key = $1",
+                prompt_key,
+            )
+        if row is None:
+            return None
+        from autorefine.directives import RefinementDirectives
+        return RefinementDirectives.model_validate(dict(row))
+
+    # ── Dimension schemas ────────────────────────────────────────────
+
+    async def async_save_dimension_schema(self, schema: Any) -> None:
+        pool = self._require_pool()
+        data = schema.model_dump(mode="json") if hasattr(schema, "model_dump") else schema
+        pk = data.get("prompt_key", "default")
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO dimension_schemas
+                   (prompt_key, schema_json, created_at)
+                   VALUES ($1, $2::jsonb, $3::timestamptz)
+                   ON CONFLICT (prompt_key) DO UPDATE SET
+                    schema_json = EXCLUDED.schema_json""",
+                pk, json.dumps(data),
+                data.get("created_at", _utc_now().isoformat()),
+            )
+
+    async def async_get_dimension_schema(self, prompt_key: str) -> Any:
+        pool = self._require_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT schema_json FROM dimension_schemas WHERE prompt_key = $1",
+                prompt_key,
+            )
+        if row is None:
+            return None
+        from autorefine.dimensions import FeedbackDimensionSchema
+        raw = row["schema_json"]
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        return FeedbackDimensionSchema.model_validate(raw)
 
     # ── Maintenance ──────────────────────────────────────────────────
 

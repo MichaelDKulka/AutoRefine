@@ -26,7 +26,7 @@ class TestDefaults:
 
     def test_default_refine_threshold(self):
         cfg = AutoRefineSettings()
-        assert cfg.refine_threshold == 20
+        assert cfg.refine_threshold == 10
 
     def test_default_refine_batch_size(self):
         cfg = AutoRefineSettings()

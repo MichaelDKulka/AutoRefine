@@ -41,6 +41,8 @@ _EMPTY_STORE: dict[str, Any] = {
     "ab_tests": [],
     "cost_entries": [],
     "processed_feedback_ids": [],
+    "refinement_directives": {},
+    "dimension_schemas": {},
 }
 
 
@@ -77,11 +79,17 @@ class JSONStore(BaseStore):
                 data = json.loads(raw)
                 # Ensure all expected keys exist (forward-compat)
                 for key, default in _EMPTY_STORE.items():
-                    data.setdefault(key, list(default) if isinstance(default, list) else default)
+                    if key not in data:
+                        if isinstance(default, list):
+                            data[key] = list(default)
+                        elif isinstance(default, dict):
+                            data[key] = dict(default)
+                        else:
+                            data[key] = default
                 return data
             except (json.JSONDecodeError, OSError):
                 pass
-        return {k: list(v) if isinstance(v, list) else v for k, v in _EMPTY_STORE.items()}
+        return {k: list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v for k, v in _EMPTY_STORE.items()}
 
     def _flush(self) -> None:
         """Atomically write the in-memory cache to disk.
@@ -284,6 +292,38 @@ class JSONStore(BaseStore):
             if isinstance(created, str) and created[:7] == month_prefix:
                 total += raw.get("cost_usd", 0.0)
         return total
+
+    # ── Refinement directives ────────────────────────────────────────
+
+    def save_refinement_directives(self, directives: Any) -> None:
+        data = directives.model_dump(mode="json") if hasattr(directives, "model_dump") else directives
+        pk = data.get("prompt_key", "default")
+        with self._lock:
+            self._data.setdefault("refinement_directives", {})[pk] = data
+            self._flush()
+
+    def get_refinement_directives(self, prompt_key: str) -> Any:
+        raw = self._data.get("refinement_directives", {}).get(prompt_key)
+        if raw is None:
+            return None
+        from autorefine.directives import RefinementDirectives
+        return RefinementDirectives.model_validate(raw)
+
+    # ── Dimension schemas ────────────────────────────────────────────
+
+    def save_dimension_schema(self, schema: Any) -> None:
+        data = schema.model_dump(mode="json") if hasattr(schema, "model_dump") else schema
+        pk = data.get("prompt_key", "default")
+        with self._lock:
+            self._data.setdefault("dimension_schemas", {})[pk] = data
+            self._flush()
+
+    def get_dimension_schema(self, prompt_key: str) -> Any:
+        raw = self._data.get("dimension_schemas", {}).get(prompt_key)
+        if raw is None:
+            return None
+        from autorefine.dimensions import FeedbackDimensionSchema
+        return FeedbackDimensionSchema.model_validate(raw)
 
     # ── Maintenance ──────────────────────────────────────────────────
 

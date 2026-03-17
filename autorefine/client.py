@@ -14,9 +14,12 @@ from autorefine.cost_tracker import CostTracker
 from autorefine.exceptions import RollbackError
 from autorefine.feedback import FeedbackCollector
 from autorefine.feedback_filter import FeedbackFilter
+from autorefine.dimensions import FeedbackDimensionSchema
+from autorefine.directives import DirectiveManager, RefinementDirectives
 from autorefine.feedback_provider import FeedbackProvider
 from autorefine.interceptor import Interceptor
-from autorefine.models import CompletionResponse, FeedbackSignal, Message, PromptVersion
+from autorefine.models import CompletionResponse, FeedbackSignal, FeedbackType, Message, PromptVersion
+from autorefine.outcomes import OutcomeTranslator
 from autorefine.notifications import PromptChangeEvent, PromptChangeNotifier
 from autorefine.pii_scrubber import PIIScrubber
 from autorefine.providers import get_provider
@@ -37,6 +40,7 @@ class AutoRefine:
                  on_refine: Callable | None = None,
                  on_prompt_change: Callable | None = None,
                  feedback_provider: FeedbackProvider | None = None,
+                 feedback_dimensions: dict[str, dict[str, Any]] | None = None,
                  **config_overrides: Any) -> None:
         cfg = AutoRefineSettings(
             api_key=api_key, model=model, refiner_key=refiner_key,
@@ -60,20 +64,39 @@ class AutoRefine:
         fb_filter = FeedbackFilter(enabled=cfg.feedback_filter_enabled)
         self._notifier = PromptChangeNotifier(webhook_url=cfg.webhook_url, on_prompt_change=on_prompt_change)
 
+        # ── Dimensions ──
+        self._dimension_schema: FeedbackDimensionSchema | None = None
+        if feedback_dimensions:
+            self._dimension_schema = FeedbackDimensionSchema.from_dict(
+                prompt_key, feedback_dimensions
+            )
+            self._store.save_dimension_schema(self._dimension_schema)
+
+        # ── Directives manager ──
+        self._directive_manager = DirectiveManager(self._store)
+
+        # ── Outcome translator ──
+        self._outcome_translator = OutcomeTranslator(
+            dimension_schema=self._dimension_schema
+        )
+
         self._refiner: Refiner | None = None
         self._ab: ABTestManager | None = None
         if cfg.refiner_key:
             self._refiner = Refiner(
                 refiner_provider=get_provider(cfg.refiner_provider, api_key=cfg.refiner_key, model=cfg.refiner_model),
                 store=self._store, prompt_key=prompt_key, batch_size=cfg.refine_batch_size,
-                cost_limit=cfg.cost_limit_monthly, pii_scrubber=scrubber, feedback_filter=fb_filter)
+                cost_limit=cfg.cost_limit_monthly, pii_scrubber=scrubber, feedback_filter=fb_filter,
+                dimension_schema=self._dimension_schema,
+                directive_manager=self._directive_manager)
             self._ab = ABTestManager(
                 store=self._store, prompt_key=prompt_key,
                 split_ratio=cfg.ab_test_split, min_interactions=cfg.ab_test_min_interactions)
 
         self._feedback = FeedbackCollector(
             store=self._store, prompt_key=prompt_key, refine_threshold=cfg.refine_threshold,
-            on_ready=self._run_refinement if cfg.auto_learn else None)
+            on_ready=self._run_refinement if cfg.auto_learn else None,
+            dimension_schema=self._dimension_schema)
         self._analytics = Analytics(self._store, prompt_key)
         self._on_refine = on_refine
         self._feedback_provider = feedback_provider
@@ -103,11 +126,28 @@ class AutoRefine:
 
     # ── Feedback ─────────────────────────────────────────────────────
 
-    def feedback(self, response_id: str, signal: str,
-                 comment: str | None = None, **kw: Any) -> FeedbackSignal:
-        """Record feedback for a response."""
+    def feedback(self, response_id: str, signal: str = "",
+                 comment: str | None = None,
+                 dimensions: dict[str, float] | None = None,
+                 context: dict[str, Any] | None = None,
+                 **kw: Any) -> FeedbackSignal:
+        """Record feedback for a response.
+
+        Supports both legacy (signal-only) and structured dimensional
+        feedback.  When *dimensions* is provided without *signal*, the
+        composite score determines the signal type automatically.
+        """
+        if not signal and dimensions:
+            # Infer signal from dimension scores
+            if self._dimension_schema:
+                composite = self._dimension_schema.compute_composite(dimensions)
+            else:
+                composite = sum(dimensions.values()) / len(dimensions)
+            signal = "positive" if composite >= 0 else "negative"
+
         return self._feedback.submit(
-            interaction_id=response_id, signal=signal, comment=comment or "", **kw)
+            interaction_id=response_id, signal=signal or "positive",
+            comment=comment or "", dimensions=dimensions, context=context, **kw)
 
     def collect_feedback(self, response: CompletionResponse) -> FeedbackSignal | None:
         """Collect feedback using the configured :class:`FeedbackProvider`.
@@ -135,6 +175,89 @@ class AutoRefine:
         signal = self._feedback_provider.classify(text)
         return self._feedback.submit(
             interaction_id=response.id, signal=signal, comment=text)
+
+    # ── Refinement directives ────────────────────────────────────────
+
+    def set_refinement_directives(
+        self,
+        prompt_key: str = "",
+        directives: list[str] | None = None,
+        domain_context: str | None = None,
+        preserve_behaviors: list[str] | None = None,
+    ) -> RefinementDirectives:
+        """Set (replace) refinement directives for a prompt_key."""
+        key = prompt_key or self._prompt_key
+        return self._directive_manager.set(
+            key, directives=directives, domain_context=domain_context,
+            preserve_behaviors=preserve_behaviors,
+        )
+
+    def update_refinement_directives(
+        self,
+        prompt_key: str = "",
+        add_directives: list[str] | None = None,
+        remove_directives: list[str] | None = None,
+        domain_context: str | None = None,
+        preserve_behaviors: list[str] | None = None,
+    ) -> RefinementDirectives:
+        """Merge updates into existing directives."""
+        key = prompt_key or self._prompt_key
+        return self._directive_manager.update(
+            key, add_directives=add_directives,
+            remove_directives=remove_directives,
+            domain_context=domain_context,
+            preserve_behaviors=preserve_behaviors,
+        )
+
+    # ── Outcome-based feedback ────────────────────────────────────────
+
+    def report_outcome(
+        self,
+        response_id: str,
+        outcome: dict[str, Any],
+        dimension_overrides: dict[str, float] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> FeedbackSignal | None:
+        """Report a ground-truth outcome for a past response.
+
+        Args:
+            response_id: The interaction ID from a previous completion.
+            outcome: Dict with 'predicted', 'actual', 'correct' keys.
+            dimension_overrides: Override auto-translated dimension scores.
+            context: Additional domain context about the outcome.
+
+        Returns:
+            The recorded FeedbackSignal, or None if the interaction was purged.
+        """
+        ix = self._store.get_interaction(response_id)
+        if ix is None:
+            logger.warning(
+                "Interaction %s not found (purged?) — skipping outcome",
+                response_id,
+            )
+            return None
+
+        dim_scores = self._outcome_translator.translate(
+            outcome, dimension_overrides=dimension_overrides, interaction=ix,
+        )
+
+        # Build context dict
+        fb_context = dict(context or {})
+        fb_context.update({
+            k: v for k, v in outcome.items()
+            if k in ("predicted", "actual", "correct")
+        })
+
+        correct = outcome.get("correct", False)
+        signal = "positive" if correct else "negative"
+
+        return self._feedback.submit(
+            interaction_id=response_id,
+            signal=signal,
+            dimensions=dim_scores,
+            context=fb_context,
+            metadata={"feedback_source": "outcome"},
+        )
 
     # ── Prompt management ────────────────────────────────────────────
 

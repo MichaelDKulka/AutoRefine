@@ -48,6 +48,7 @@ class AnalyticsSnapshot:
     score_by_version: dict[int, float] = field(default_factory=dict)
     feedback_distribution: dict[str, int] = field(default_factory=dict)
     improvement_curve: list[dict] = field(default_factory=list)
+    dimension_metrics: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -123,6 +124,26 @@ class Analytics:
 
         monthly_refiner = self._store.get_monthly_refiner_cost()
 
+        # Per-dimension metrics (if any feedback has dimensional scores)
+        dimension_metrics: dict[str, dict] = {}
+        dim_scores_agg: dict[str, list[float]] = {}
+        for fb in feedback:
+            if fb.dimensions:
+                for dim_name, dim_score in fb.dimensions.items():
+                    dim_scores_agg.setdefault(dim_name, []).append(dim_score)
+        for dim_name, scores in dim_scores_agg.items():
+            count = len(scores)
+            mean = sum(scores) / count
+            pos = sum(1 for s in scores if s > 0)
+            neg = sum(1 for s in scores if s < 0)
+            dimension_metrics[dim_name] = {
+                "mean_score": round(mean, 4),
+                "count": count,
+                "positive_count": pos,
+                "negative_count": neg,
+                "positive_rate": round(pos / count, 4) if count else 0.0,
+            }
+
         return AnalyticsSnapshot(
             prompt_key=self._prompt_key,
             total_interactions=len(interactions), total_feedback=total_fb,
@@ -130,7 +151,7 @@ class Analytics:
             active_version=active.version if active else 0,
             total_versions=len(history), refiner_cost=monthly_refiner,
             score_by_version=avg_by_version, feedback_distribution=dist,
-            improvement_curve=curve,
+            improvement_curve=curve, dimension_metrics=dimension_metrics,
         )
 
     # ── Improvement curve ────────────────────────────────────────────

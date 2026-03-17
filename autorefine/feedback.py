@@ -134,6 +134,8 @@ class FeedbackCollector:
         on_ready: Optional callback invoked when the unprocessed count
             reaches ``refine_threshold``.  Typically wired to the
             client's ``_run_refinement`` method.
+        dimension_schema: Optional :class:`~autorefine.dimensions.FeedbackDimensionSchema`
+            for structured multi-axis feedback.
 
     Usage::
 
@@ -159,12 +161,14 @@ class FeedbackCollector:
         refine_threshold: int = 20,
         batch_size: int = 1,
         on_ready: Callable[[], Any] | None = None,
+        dimension_schema: Any | None = None,
     ) -> None:
         self._store = store
         self._prompt_key = prompt_key
         self._refine_threshold = refine_threshold
         self._batch_size = max(1, batch_size)
         self._on_ready = on_ready
+        self._dimension_schema = dimension_schema
 
         # In-memory batch buffer
         self._buffer: list[FeedbackSignal] = []
@@ -257,25 +261,66 @@ class FeedbackCollector:
         score: float | None = None,
         user_id: str = "",
         metadata: dict[str, Any] | None = None,
+        dimensions: dict[str, float] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> FeedbackSignal:
         """Record a feedback signal (backward-compatible with client.py).
 
         Delegates to :meth:`record` but also accepts a separate
         ``correction`` parameter for :attr:`FeedbackType.CORRECTION`
         signals.
+
+        When *dimensions* are provided, the composite score is computed
+        as the weighted average of the dimensional scores.  When both
+        *signal* and *dimensions* are given, *dimensions* takes precedence
+        for any dimension it covers; the *signal* sets a default score
+        on dimensions not explicitly provided.
         """
         fb_type = _resolve_feedback_type(signal)
-        normalised = normalise_score(fb_type, score)
+        canonical_score = normalise_score(fb_type, score)
+
+        # ── Dimension handling ──
+        resolved_dims: dict[str, float] = {}
+        if dimensions:
+            schema = self._dimension_schema
+            # Validate and clamp dimension scores
+            for dim_name, dim_score in dimensions.items():
+                if schema and dim_name in schema.dimensions:
+                    dim = schema.dimensions[dim_name]
+                    lo, hi = dim.scale
+                    if dim_score < lo or dim_score > hi:
+                        logger.warning(
+                            "Dimension %s score %.2f outside scale [%.1f, %.1f] — clamping",
+                            dim_name, dim_score, lo, hi,
+                        )
+                        dim_score = max(lo, min(hi, dim_score))
+                resolved_dims[dim_name] = dim_score
+
+            # If signal provided, fill unscored dimensions with canonical score
+            if schema and signal:
+                for dim_name in schema.dimensions:
+                    if dim_name not in resolved_dims:
+                        resolved_dims[dim_name] = canonical_score
+
+            # Compute composite from dimensions
+            if schema and resolved_dims:
+                canonical_score = schema.compute_composite(resolved_dims)
+        elif self._dimension_schema and signal:
+            # Legacy signal with dimensions configured — broadcast to all
+            for dim_name in self._dimension_schema.dimensions:
+                resolved_dims[dim_name] = canonical_score
 
         fb = FeedbackSignal(
             interaction_id=interaction_id,
             feedback_type=fb_type,
-            score=normalised,
+            score=canonical_score,
             confidence=confidence_for_type(fb_type),
             comment=comment,
             correction=correction,
             user_id=user_id,
             metadata=metadata or {},
+            dimensions=resolved_dims,
+            context=context or {},
         )
 
         self._buffer.append(fb)
@@ -284,8 +329,8 @@ class FeedbackCollector:
             self.flush()
 
         logger.debug(
-            "Feedback %s recorded for interaction %s (score=%.2f)",
-            fb.feedback_type.value, interaction_id, fb.score,
+            "Feedback %s recorded for interaction %s (score=%.2f, dims=%d)",
+            fb.feedback_type.value, interaction_id, fb.score, len(resolved_dims),
         )
 
         self._maybe_trigger()
@@ -505,9 +550,14 @@ class FeedbackCollector:
         self, interaction_id: str, signal: str | FeedbackType,
         comment: str = "", correction: str = "", score: float | None = None,
         user_id: str = "", metadata: dict[str, Any] | None = None,
+        dimensions: dict[str, float] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> FeedbackSignal:
         """Async version of submit()."""
-        fb = self.submit(interaction_id, signal, comment, correction, score, user_id, metadata)
+        fb = self.submit(
+            interaction_id, signal, comment, correction, score,
+            user_id, metadata, dimensions=dimensions, context=context,
+        )
         return fb
 
     async def async_flush(self) -> int:

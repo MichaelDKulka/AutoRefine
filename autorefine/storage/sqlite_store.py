@@ -159,7 +159,47 @@ class SQLiteStore(BaseStore):
     def _init_db(self) -> None:
         conn = self._connect()
         conn.executescript(SCHEMA)
+        # Run migrations for new columns/tables
+        self._migrate(conn)
         conn.close()
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Add columns/tables introduced after the initial schema."""
+        # feedback.dimensions and feedback.context columns
+        cursor = conn.execute("PRAGMA table_info(feedback)")
+        cols = {row["name"] for row in cursor.fetchall()}
+        if "dimensions" not in cols:
+            conn.execute("ALTER TABLE feedback ADD COLUMN dimensions TEXT DEFAULT '{}'")
+        if "context" not in cols:
+            conn.execute("ALTER TABLE feedback ADD COLUMN context TEXT DEFAULT '{}'")
+        # refinement_directives table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS refinement_directives (
+                prompt_key         TEXT PRIMARY KEY,
+                directives         TEXT DEFAULT '[]',
+                domain_context     TEXT DEFAULT '',
+                preserve_behaviors TEXT DEFAULT '[]',
+                version            INTEGER DEFAULT 1,
+                created_at         TEXT NOT NULL,
+                updated_at         TEXT NOT NULL
+            )
+        """)
+        # dimension_schemas table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dimension_schemas (
+                prompt_key TEXT PRIMARY KEY,
+                schema_json TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+        """)
+        # ab_tests per-dimension columns
+        cursor = conn.execute("PRAGMA table_info(ab_tests)")
+        ab_cols = {row["name"] for row in cursor.fetchall()}
+        for col in ("control_dimension_scores", "candidate_dimension_scores",
+                     "control_dimension_counts", "candidate_dimension_counts"):
+            if col not in ab_cols:
+                conn.execute(f"ALTER TABLE ab_tests ADD COLUMN {col} TEXT DEFAULT '{{}}'")
+        conn.commit()
 
     # ── Interactions ─────────────────────────────────────────────────
 
@@ -236,13 +276,15 @@ class SQLiteStore(BaseStore):
                 """INSERT OR REPLACE INTO feedback
                    (id, interaction_id, feedback_type, score, confidence,
                     comment, correction, user_id, processed, created_at,
-                    metadata)
-                   VALUES (?,?,?,?,?,?,?,?,0,?,?)""",
+                    metadata, dimensions, context)
+                   VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?)""",
                 (
                     data["id"], data["interaction_id"], data["feedback_type"],
                     data["score"], data["confidence"], data["comment"],
                     data["correction"], data["user_id"], data["created_at"],
                     json.dumps(data["metadata"]),
+                    json.dumps(data.get("dimensions", {})),
+                    json.dumps(data.get("context", {})),
                 ),
             )
             conn.commit()
@@ -290,6 +332,8 @@ class SQLiteStore(BaseStore):
     def _row_to_feedback(row: sqlite3.Row) -> FeedbackSignal:
         d = dict(row)
         d["metadata"] = json.loads(d.get("metadata", "{}"))
+        d["dimensions"] = json.loads(d.get("dimensions", "{}"))
+        d["context"] = json.loads(d.get("context", "{}"))
         d.pop("processed", None)
         return FeedbackSignal.model_validate(d)
 
@@ -379,8 +423,10 @@ class SQLiteStore(BaseStore):
                     split_ratio, control_interactions,
                     candidate_interactions, control_score,
                     candidate_score, is_active, created_at,
-                    completed_at, result)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    completed_at, result,
+                    control_dimension_scores, candidate_dimension_scores,
+                    control_dimension_counts, candidate_dimension_counts)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     data["id"], data["prompt_key"],
                     data["control_version"], data["candidate_version"],
@@ -389,6 +435,10 @@ class SQLiteStore(BaseStore):
                     data["candidate_score"], int(data["is_active"]),
                     data["created_at"], data.get("completed_at"),
                     data["result"],
+                    json.dumps(data.get("control_dimension_scores", {})),
+                    json.dumps(data.get("candidate_dimension_scores", {})),
+                    json.dumps(data.get("control_dimension_counts", {})),
+                    json.dumps(data.get("candidate_dimension_counts", {})),
                 ),
             )
             conn.commit()
@@ -412,7 +462,79 @@ class SQLiteStore(BaseStore):
     def _row_to_ab_test(row: sqlite3.Row) -> ABTest:
         d = dict(row)
         d["is_active"] = bool(d.get("is_active"))
+        for key in ("control_dimension_scores", "candidate_dimension_scores",
+                     "control_dimension_counts", "candidate_dimension_counts"):
+            if key in d and isinstance(d[key], str):
+                d[key] = json.loads(d[key])
         return ABTest.model_validate(d)
+
+    # ── Refinement directives ────────────────────────────────────────
+
+    def save_refinement_directives(self, directives: Any) -> None:
+        from typing import Any as _Any
+        data = directives.model_dump(mode="json") if hasattr(directives, "model_dump") else directives
+        with self._lock:
+            conn = self._connect()
+            conn.execute(
+                """INSERT OR REPLACE INTO refinement_directives
+                   (prompt_key, directives, domain_context, preserve_behaviors,
+                    version, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    data["prompt_key"],
+                    json.dumps(data.get("directives", [])),
+                    data.get("domain_context", ""),
+                    json.dumps(data.get("preserve_behaviors", [])),
+                    data.get("version", 1),
+                    data.get("created_at", _utc_now().isoformat()),
+                    data.get("updated_at", _utc_now().isoformat()),
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+    def get_refinement_directives(self, prompt_key: str) -> Any:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT * FROM refinement_directives WHERE prompt_key = ?",
+            (prompt_key,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        d = dict(row)
+        d["directives"] = json.loads(d.get("directives", "[]"))
+        d["preserve_behaviors"] = json.loads(d.get("preserve_behaviors", "[]"))
+        from autorefine.directives import RefinementDirectives
+        return RefinementDirectives.model_validate(d)
+
+    # ── Dimension schemas ────────────────────────────────────────────
+
+    def save_dimension_schema(self, schema: Any) -> None:
+        data = schema.model_dump(mode="json") if hasattr(schema, "model_dump") else schema
+        pk = data.get("prompt_key", "default")
+        with self._lock:
+            conn = self._connect()
+            conn.execute(
+                """INSERT OR REPLACE INTO dimension_schemas
+                   (prompt_key, schema_json, created_at)
+                   VALUES (?,?,?)""",
+                (pk, json.dumps(data), data.get("created_at", _utc_now().isoformat())),
+            )
+            conn.commit()
+            conn.close()
+
+    def get_dimension_schema(self, prompt_key: str) -> Any:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT schema_json FROM dimension_schemas WHERE prompt_key = ?",
+            (prompt_key,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        from autorefine.dimensions import FeedbackDimensionSchema
+        return FeedbackDimensionSchema.model_validate(json.loads(row["schema_json"]))
 
     # ── Cost tracking ────────────────────────────────────────────────
 

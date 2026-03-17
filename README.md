@@ -18,19 +18,19 @@
 
 ---
 
-## Quickstart
+ Quickstart
 
 ```python
 from autorefine import AutoRefine
 
 client = AutoRefine(api_key="sk-...", model="gpt-4o", refiner_key="sk-ant-...", auto_learn=True)
 resp = client.complete("You are a helpful assistant.", "How do I make pasta?")
-client.feedback(resp.id, "thumbs_up")  # your prompt auto-improves from here
+client.feedback(resp.id, "thumbs_up")   your prompt auto-improves from here
 ```
 
-## Demo
+ Demo
 
-> **Coming soon**: Record a 30-second GIF showing the dashboard improvement curve
+> Coming soon: Record a 30-second GIF showing the dashboard improvement curve
 > climbing as feedback accumulates. Use [asciinema](https://asciinema.org/) for
 > the terminal or a screen recorder for the web dashboard.
 
@@ -38,7 +38,7 @@ client.feedback(resp.id, "thumbs_up")  # your prompt auto-improves from here
 
 ---
 
-## How it works
+ How it works
 
 ```mermaid
 graph LR
@@ -54,13 +54,13 @@ graph LR
     D -->|next request uses new prompt| B
 ```
 
-1. **Intercept** — Every LLM call passes through invisible middleware that swaps in the latest refined prompt
-2. **Collect** — Your app records feedback (`thumbs_up`, `thumbs_down`, `correction`) tied to specific responses
-3. **Refine** — Claude analyzes feedback patterns and surgically patches the prompt
-4. **Validate** — Candidates are A/B tested with a Welch's t-test (no scipy needed)
-5. **Promote** — Winners are promoted automatically. Rollback anytime
+1. Intercept — Every LLM call passes through invisible middleware that swaps in the latest refined prompt
+2. Collect — Your app records feedback (`thumbs_up`, `thumbs_down`, `correction`) tied to specific responses
+3. Refine — Claude analyzes feedback patterns and surgically patches the prompt
+4. Validate — Candidates are A/B tested with a Welch's t-test (no scipy needed)
+5. Promote — Winners are promoted automatically. Rollback anytime
 
-## Why AutoRefine?
+ Why AutoRefine?
 
 | Manual prompt engineering | With AutoRefine |
 |---------------------------|-----------------|
@@ -71,22 +71,22 @@ graph LR
 | No history or rollback | Full version history with instant rollback |
 | Hours of iteration | Runs automatically in the background |
 
-## Features
+ Features
 
 | Category | What you get |
 |----------|-------------|
-| **Core loop** | Zero-code prompt improvement, surgical meta-prompt, conditional logic over absolutes |
-| **Feedback** | Thumbs up/down, corrections, custom scores, embeddable HTML widget |
-| **Validation** | A/B testing with Welch's t-test, PII scrubbing, feedback noise filtering |
-| **Providers** | OpenAI, Anthropic, Mistral, Ollama, any OpenAI-compatible API |
-| **Storage** | JSON (dev), SQLite (production), PostgreSQL (distributed) |
-| **Security** | Encryption at rest, multi-tenant namespaces, API key scrubbing, CORS, rate limiting |
-| **Analytics** | Improvement curves, failure patterns, cost tracking, ROI reports |
-| **Dashboard** | Real-time web UI with Chart.js, diff viewer, A/B test controls |
-| **Async** | Native async support for OpenAI, Anthropic, Ollama |
-| **CLI** | `autorefine init`, `dashboard`, `prompts`, `stats`, `export`, `reset` |
+| Core loop | Zero-code prompt improvement, surgical meta-prompt, conditional logic over absolutes |
+| Feedback | Thumbs up/down, corrections, custom scores, embeddable HTML widget |
+| Validation | A/B testing with Welch's t-test, PII scrubbing, feedback noise filtering |
+| Providers | OpenAI, Anthropic, Mistral, Ollama, any OpenAI-compatible API |
+| Storage | JSON (dev), SQLite (production), PostgreSQL (distributed) |
+| Security | Encryption at rest, multi-tenant namespaces, API key scrubbing, CORS, rate limiting |
+| Analytics | Improvement curves, failure patterns, cost tracking, ROI reports |
+| Dashboard | Real-time web UI with Chart.js, diff viewer, A/B test controls |
+| Async | Native async support for OpenAI, Anthropic, Ollama |
+| CLI | `autorefine init`, `dashboard`, `prompts`, `stats`, `export`, `reset` |
 
-## Install
+ Install
 
 ```bash
 pip install autorefine
@@ -95,43 +95,43 @@ pip install autorefine
 With extras:
 
 ```bash
-pip install autorefine[openai]        # OpenAI GPT models
-pip install autorefine[anthropic]     # Anthropic Claude
-pip install autorefine[dashboard]     # Web dashboard (FastAPI + uvicorn)
-pip install autorefine[postgres]      # PostgreSQL storage
-pip install autorefine[encryption]    # Fernet encryption at rest
-pip install autorefine[all]           # Everything
+pip install autorefine[openai]         OpenAI GPT models
+pip install autorefine[anthropic]      Anthropic Claude
+pip install autorefine[dashboard]      Web dashboard (FastAPI + uvicorn)
+pip install autorefine[postgres]       PostgreSQL storage
+pip install autorefine[encryption]     Fernet encryption at rest
+pip install autorefine[all]            Everything
 ```
 
-## Usage
+ Usage
 
-### Basic
+ Basic
 
 ```python
 from autorefine import AutoRefine
 
-# Create client (reads .env automatically)
+ Create client (reads .env automatically)
 client = AutoRefine(
     api_key="sk-...",
     model="gpt-4o",
-    refiner_key="sk-ant-...",   # optional — enables auto-refinement
-    auto_learn=True,             # refine when feedback threshold is met
+    refiner_key="sk-ant-...",    optional — enables auto-refinement
+    auto_learn=True,              refine when feedback threshold is met
 )
 
-# Set your initial prompt
+ Set your initial prompt
 client.set_system_prompt("You are a helpful cooking assistant.")
 
-# Use it like any LLM client
+ Use it like any LLM client
 resp = client.chat("You are helpful.", [{"role": "user", "content": "How do I make pasta?"}])
 print(resp.text)
 
-# Collect feedback from your users
+ Collect feedback from your users
 client.feedback(resp.id, "thumbs_up")
 client.feedback(resp.id, "thumbs_down", comment="Too verbose")
 client.feedback(resp.id, "correction", comment="The correct method is...")
 ```
 
-### Async
+ Async
 
 ```python
 from autorefine import AsyncAutoRefine
@@ -141,32 +141,32 @@ resp = await client.complete("Be helpful.", "What is 2+2?")
 await client.feedback(resp.id, "thumbs_up")
 ```
 
-### Decorator
+ Decorator
 
 ```python
 from autorefine import autorefine
 
 @autorefine(api_key="sk-...", refiner_key="sk-ant-...", auto_learn=True)
 def ask(system: str, prompt: str):
-    pass  # AutoRefine handles the call
+    pass   AutoRefine handles the call
 
 resp = ask("You are helpful.", "What is 2+2?")
 ask.feedback(resp.id, "thumbs_up")
 ```
 
-### CLI
+ CLI
 
 ```bash
-autorefine init                           # interactive setup
-autorefine dashboard --port 8787          # launch web UI
-autorefine prompts list                   # list prompt keys
-autorefine prompts show default           # print active prompt
-autorefine prompts diff default 1 2       # colored diff
-autorefine stats                          # feedback/cost summary
-autorefine export default --format json   # export history
+autorefine init                            interactive setup
+autorefine dashboard --port 8787           launch web UI
+autorefine prompts list                    list prompt keys
+autorefine prompts show default            print active prompt
+autorefine prompts diff default 1 2        colored diff
+autorefine stats                           feedback/cost summary
+autorefine export default --format json    export history
 ```
 
-## Examples
+ Examples
 
 | Example | Description |
 |---------|-------------|
@@ -177,24 +177,24 @@ autorefine export default --format json   # export history
 | [`async_chatbot.py`](examples/async_chatbot.py) | AsyncIO + FastAPI web endpoint |
 | [`flask_app_with_widget.py`](examples/flask_app_with_widget.py) | Flask chatbot with feedback widget |
 
-## Comparison
+ Comparison
 
 | Feature | AutoRefine | DSPy | PromptLayer | Humanloop | LangSmith |
 |---------|-----------|------|-------------|-----------|-----------|
-| Auto prompt refinement | **Yes** | Compilation | No | No | No |
-| Zero code changes | **Yes** | No | Logging only | Logging only | Logging only |
-| A/B testing | **Built-in** | No | Manual | Manual | No |
-| PII scrubbing | **Built-in** | No | No | No | No |
-| Self-hosted | **Yes** | Yes | SaaS | SaaS | Partial |
-| Open source | **MIT** | MIT | Partial | No | Partial |
-| Cost tracking | **Per-call** | No | No | Yes | Yes |
-| Pricing | **Free** | Free | $29+/mo | $79+/mo | $39+/mo |
+| Auto prompt refinement | Yes | Compilation | No | No | No |
+| Zero code changes | Yes | No | Logging only | Logging only | Logging only |
+| A/B testing | Built-in | No | Manual | Manual | No |
+| PII scrubbing | Built-in | No | No | No | No |
+| Self-hosted | Yes | Yes | SaaS | SaaS | Partial |
+| Open source | MIT | MIT | Partial | No | Partial |
+| Cost tracking | Per-call | No | No | Yes | Yes |
+| Pricing | Free | Free | $29+/mo | $79+/mo | $39+/mo |
 
-## Configuration
+ Configuration
 
-All settings via env vars (`AUTOREFINE_*`) or constructor args. See [full reference](https://upwell-solutions.github.io/autorefine/configuration/).
+All settings via env vars (`AUTOREFINE_`) or constructor args. See [full reference](https://upwell-solutions.github.io/autorefine/configuration/).
 
-## Contributing
+ Contributing
 
 We welcome contributions! Please:
 
@@ -212,7 +212,7 @@ pytest tests/ -v
 ruff check autorefine/ tests/
 ```
 
-## License
+ License
 
 MIT -- see [LICENSE](LICENSE).
 

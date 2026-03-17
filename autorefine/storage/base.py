@@ -151,6 +151,30 @@ class BaseStore(ABC):
         """Return the total refiner spend in USD for the current calendar month."""
         ...
 
+    # ── Refinement directives ────────────────────────────────────────
+
+    def save_refinement_directives(self, directives: Any) -> None:
+        """Persist refinement directives for a prompt_key.
+
+        Default no-op for backward compat — overridden by backends.
+        """
+
+    def get_refinement_directives(self, prompt_key: str) -> Any:
+        """Retrieve refinement directives for a prompt_key, or None."""
+        return None
+
+    # ── Dimension schemas ────────────────────────────────────────────
+
+    def save_dimension_schema(self, schema: Any) -> None:
+        """Persist a feedback dimension schema for a prompt_key.
+
+        Default no-op for backward compat — overridden by backends.
+        """
+
+    def get_dimension_schema(self, prompt_key: str) -> Any:
+        """Retrieve a feedback dimension schema, or None."""
+        return None
+
     # ── Maintenance ──────────────────────────────────────────────────
 
     @abstractmethod

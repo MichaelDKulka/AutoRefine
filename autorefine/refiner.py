@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from autorefine._retry import retry_provider_call
 from autorefine.exceptions import CostLimitExceeded, NoFeedbackError, RefinementError
@@ -51,11 +52,14 @@ CURRENT SYSTEM PROMPT (v{prompt_version})
 ═══════════════════════════════════════════════
 {current_prompt}
 
+{directives_block}\
+{dimension_definitions}\
 ═══════════════════════════════════════════════
 FEEDBACK OVERVIEW
 ═══════════════════════════════════════════════
 {feedback_summary}
 
+{dimension_analysis}\
 ═══════════════════════════════════════════════
 INTERACTION EVIDENCE
 ═══════════════════════════════════════════════
@@ -69,7 +73,7 @@ what the prompt is missing, and the positive feedback shows you what to PRESERVE
 YOUR INSTRUCTIONS
 ═══════════════════════════════════════════════
 
-### Step 1: Analyse failure patterns
+### Step 1: Analyse{step1_dimension_hint}
 - Read every negative feedback signal. Group them into categories.
 - For each category, identify the ROOT CAUSE in the current prompt.
   Ask: "What instruction is missing, ambiguous, or wrong that caused this failure?"
@@ -86,27 +90,16 @@ You MUST follow these rules when rewriting:
 
 1. **Patch, don't rewrite.** Start from the current prompt and make targeted edits.
    Do NOT discard the existing structure or rephrase things that are already working.
-   If the current prompt has 10 instructions and only 2 need fixing, the new prompt
-   should still contain the other 8 essentially unchanged.
 
-2. **Use conditional logic, not absolutes.** If feedback is mixed (some users want
-   brevity, others want detail), add a conditional rule:
-   "Be concise by default. When the user asks 'why', asks for detail, or the topic
-   is inherently complex, provide a thorough explanation."
-   NEVER swing to an extreme based on a subset of complaints.
+2. **Use conditional logic, not absolutes.** If feedback is mixed, add a conditional
+   rule. NEVER swing to an extreme based on a subset of complaints.
 
 3. **Preserve positive behaviors.** Before removing or weakening ANY instruction,
-   verify that no positive feedback relied on it. If users praised detailed answers,
-   do not make answers shorter just because a few users complained about length.
+   verify that no positive feedback relied on it.
 
 4. **Be specific and concrete.** Every instruction should be actionable.
-   BAD:  "Be helpful and accurate."
-   GOOD: "When the user asks a factual question, cite the source or caveat
-          uncertainty with 'I'm not certain, but…'"
 
-5. **Respect the feedback distribution.** If 80% of feedback is positive, the prompt
-   is mostly working — make small, targeted fixes. If 80% is negative, consider
-   larger structural changes. Weight your edits proportionally to the evidence.
+5. **Respect the feedback distribution.** Weight your edits proportionally to the evidence.
 
 6. **No meta-commentary.** The new prompt should contain ONLY instructions for the
    AI assistant — no notes about what you changed or why. Those go in the changelog.
@@ -115,20 +108,15 @@ You MUST follow these rules when rewriting:
 Respond with ONLY a JSON object. No markdown fences, no commentary outside the JSON.
 
 {{
-  "new_prompt": "<the complete rewritten system prompt — must be a standalone prompt, not a diff>",
-  "changelog": [
-    "<specific change 1: what you changed and why>",
-    "<specific change 2: what you changed and why>"
-  ],
-  "gaps_identified": [
-    "<gap 1: concrete description of what the current prompt is missing>",
-    "<gap 2: concrete description of what the current prompt is missing>"
-  ],
-  "reasoning": "<2-3 paragraphs explaining: what patterns you found in the feedback, why you chose the changes you did, and what trade-offs you considered>",
-  "expected_improvements": [
-    "<improvement 1: what should get better>",
-    "<improvement 2: what should get better>"
-  ]
+  "new_prompt": "<the complete rewritten system prompt>",
+  "changelog": ["<specific change 1: what and why>", ...],
+  "gaps_identified": ["<gap 1: concrete description>", ...],
+  "reasoning": "<2-3 paragraphs explaining patterns, choices, trade-offs>",
+  "expected_improvements": ["<improvement 1>", ...],
+  "dimension_improvements": {{"<dimension_name>": "<what should improve>", ...}},
+  "directives_respected": ["<directive text that was respected>", ...],
+  "behaviors_preserved": ["<behavior that was preserved>", ...],
+  "conflicts_detected": ["<tension between directive and feedback>", ...]
 }}
 """
 
@@ -156,9 +144,11 @@ def _build_feedback_summary(feedback_items: list[FeedbackSignal]) -> str:
     avg_score = sum(fb.score for fb in feedback_items) / total
     avg_confidence = sum(fb.confidence for fb in feedback_items) / total
 
-    # Count corrections specifically — they carry the most actionable info
     corrections = sum(
         1 for fb in feedback_items if fb.feedback_type.value == "correction"
+    )
+    outcomes = sum(
+        1 for fb in feedback_items if fb.feedback_type.value == "outcome"
     )
 
     lines = [
@@ -176,14 +166,23 @@ def _build_feedback_summary(feedback_items: list[FeedbackSignal]) -> str:
         )
     lines.append(f"Average score: {avg_score:+.2f}  |  Average confidence: {avg_confidence:.2f}")
 
-    # Interpretation hint for the refiner
+    # Outcome data summary
+    if outcomes:
+        outcome_items = [fb for fb in feedback_items if fb.feedback_type.value == "outcome"]
+        correct = sum(1 for fb in outcome_items if fb.context.get("correct", False))
+        incorrect = outcomes - correct
+        lines.append(f"\nOUTCOME DATA: {outcomes} of {total} signals include ground-truth outcomes.")
+        lines.append(f"  Correct predictions:   {correct}/{outcomes} ({100 * correct / outcomes:.0f}%)")
+        lines.append(f"  Incorrect predictions: {incorrect}/{outcomes} ({100 * incorrect / outcomes:.0f}%)")
+
+    # Interpretation hint
     if positives > 0 and negatives / max(positives, 1) < 0.3:
         lines.append(
-            "→ Mostly positive. Make small, targeted fixes only."
+            "\n-> Mostly positive. Make small, targeted fixes only."
         )
     elif negatives > positives:
         lines.append(
-            "→ More negative than positive. Consider structural improvements."
+            "\n-> More negative than positive. Consider structural improvements."
         )
 
     return "\n".join(lines)
@@ -214,12 +213,41 @@ def _build_interaction_log(
             parts = [
                 f"  [{label}] score={fb.score:+.1f} confidence={fb.confidence:.1f}"
             ]
+
+            # Dimensional scores
+            if fb.dimensions:
+                dim_str = "  ".join(
+                    f"{k}: {v:+.1f}" for k, v in fb.dimensions.items()
+                )
+                parts.append(f"  DIMENSION SCORES: {dim_str}")
+
             if fb.comment:
                 comment = scrubber.scrub(fb.comment) if scrubber else fb.comment
                 parts.append(f'    User said: "{comment}"')
             if fb.correction:
                 correction = scrubber.scrub(fb.correction) if scrubber else fb.correction
                 parts.append(f'    User\'s preferred answer: "{correction}"')
+
+            # Developer context
+            ctx = fb.context
+            if ctx:
+                if scrubber:
+                    ctx = {k: scrubber.scrub(str(v)) for k, v in ctx.items()}
+                ctx_lines = [f"    {k}: {v}" for k, v in ctx.items()]
+                parts.append("  DEVELOPER CONTEXT:\n" + "\n".join(ctx_lines))
+
+            # Outcome data
+            if fb.feedback_type.value == "outcome" and ctx:
+                predicted = ctx.get("predicted", "")
+                actual = ctx.get("actual", "")
+                correct = ctx.get("correct", "")
+                if predicted or actual:
+                    outcome_label = "CORRECT" if correct else "INCORRECT"
+                    parts.append(
+                        f"  OUTCOME: {outcome_label} "
+                        f"(predicted: {predicted}, actual: {actual})"
+                    )
+
             fb_lines.append("\n".join(parts))
 
         entry = (
@@ -271,6 +299,8 @@ class Refiner:
         pii_scrubber: PIIScrubber | None = None,
         feedback_filter: FeedbackFilter | None = None,
         validation_count: int = 3,
+        dimension_schema: Any = None,
+        directive_manager: Any = None,
     ) -> None:
         self._provider = refiner_provider
         self._store = store
@@ -280,6 +310,8 @@ class Refiner:
         self._scrubber = pii_scrubber
         self._feedback_filter = feedback_filter
         self._validation_count = validation_count
+        self._dimension_schema = dimension_schema
+        self._directive_manager = directive_manager
 
     # ── Primary API ──────────────────────────────────────────────────
 
@@ -352,6 +384,12 @@ class Refiner:
             )
 
         # ── Build candidate ──
+        directives_version = 0
+        if self._directive_manager:
+            rd = self._directive_manager.get(key)
+            if rd:
+                directives_version = rd.version
+
         candidate = PromptCandidate(
             prompt_key=key,
             system_prompt=result.new_prompt,
@@ -361,6 +399,7 @@ class Refiner:
                 else str(result.changelog),
             reasoning=result.reasoning,
             expected_improvements=result.expected_improvements,
+            directives_version=directives_version,
         )
 
         logger.info(
@@ -433,11 +472,58 @@ class Refiner:
         interaction_log = _build_interaction_log(bundles, scrubber=self._scrubber)
         feedback_summary = _build_feedback_summary(all_feedback)
 
+        # ── Directives block ──
+        directives_block = ""
+        if self._directive_manager:
+            directives_block = self._directive_manager.format_for_meta_prompt(
+                self._prompt_key
+            )
+            if directives_block:
+                directives_block += "\n"
+
+        # ── Dimension definitions + analysis ──
+        dimension_definitions = ""
+        dimension_analysis = ""
+        step1_hint = " failure patterns"
+        if self._dimension_schema and self._dimension_schema.dimensions:
+            from autorefine.dimensions import DimensionAggregator
+
+            # Definitions table
+            dim_lines = [
+                "═══════════════════════════════════════════════",
+                "FEEDBACK DIMENSION DEFINITIONS",
+                "═══════════════════════════════════════════════",
+                "",
+            ]
+            for name, dim in self._dimension_schema.dimensions.items():
+                dim_lines.append(
+                    f"  {name:<20} weight={dim.weight}  priority={dim.refinement_priority}"
+                )
+                dim_lines.append(f"    {dim.description}")
+                dim_lines.append("")
+            dimension_definitions = "\n".join(dim_lines) + "\n"
+
+            # Per-dimension analysis
+            aggregator = DimensionAggregator(self._dimension_schema)
+            dimension_analysis = aggregator.format_for_meta_prompt(all_feedback)
+            if dimension_analysis:
+                dimension_analysis = (
+                    "═══════════════════════════════════════════════\n"
+                    "DIMENSION-LEVEL ANALYSIS\n"
+                    "═══════════════════════════════════════════════\n"
+                    + dimension_analysis + "\n\n"
+                )
+            step1_hint = " by dimension (not just overall sentiment)"
+
         meta_prompt = META_PROMPT.format(
             current_prompt=current_prompt or "(no system prompt set)",
             prompt_version=current_version,
             interaction_log=interaction_log,
             feedback_summary=feedback_summary,
+            directives_block=directives_block,
+            dimension_definitions=dimension_definitions,
+            dimension_analysis=dimension_analysis,
+            step1_dimension_hint=step1_hint,
         )
 
         logger.info(
@@ -660,6 +746,31 @@ class Refiner:
         else:
             improvements = []
 
+        # Normalize dimension_improvements
+        raw_dim_imp = data.get("dimension_improvements", {})
+        dim_improvements = {}
+        if isinstance(raw_dim_imp, dict):
+            dim_improvements = {str(k): str(v) for k, v in raw_dim_imp.items()}
+
+        # Normalize list fields
+        directives_respected = data.get("directives_respected", [])
+        if isinstance(directives_respected, list):
+            directives_respected = [str(d) for d in directives_respected]
+        else:
+            directives_respected = []
+
+        behaviors_preserved = data.get("behaviors_preserved", [])
+        if isinstance(behaviors_preserved, list):
+            behaviors_preserved = [str(b) for b in behaviors_preserved]
+        else:
+            behaviors_preserved = []
+
+        conflicts_detected = data.get("conflicts_detected", [])
+        if isinstance(conflicts_detected, list):
+            conflicts_detected = [str(c) for c in conflicts_detected]
+        else:
+            conflicts_detected = []
+
         return RefinementResult(
             new_prompt=new_prompt.strip(),
             changelog=changelog,
@@ -667,4 +778,8 @@ class Refiner:
             gaps_identified=gaps,
             expected_improvements=improvements,
             feedback_summary=feedback_summary,
+            dimension_improvements=dim_improvements,
+            directives_respected=directives_respected,
+            behaviors_preserved=behaviors_preserved,
+            conflicts_detected=conflicts_detected,
         )

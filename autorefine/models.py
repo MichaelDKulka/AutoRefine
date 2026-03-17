@@ -51,6 +51,9 @@ class FeedbackType(str, Enum):
     IMPLICIT_ABANDON = "implicit_abandon"
     """The user abandoned the conversation shortly after — weak negative signal."""
 
+    OUTCOME = "outcome"
+    """Ground-truth outcome feedback (predicted vs actual)."""
+
 
 class MessageRole(str, Enum):
     """Standard chat-message roles."""
@@ -200,6 +203,23 @@ class FeedbackSignal(BaseModel):
         default_factory=dict,
         description="Arbitrary key-value pairs for caller-specific context.",
     )
+    dimensions: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Per-dimension quality scores. Keys are dimension names defined "
+            "in the client's feedback_dimensions config. Values are scores "
+            "in the dimension's configured scale (normalized to [-1,1] internally). "
+            "Empty dict for legacy single-score feedback."
+        ),
+    )
+    context: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Developer-supplied structured domain context. Surfaced to the "
+            "refiner in the meta-prompt. Not the same as metadata — this is "
+            "for domain-specific information about what happened."
+        ),
+    )
 
     @field_validator("score")
     @classmethod
@@ -297,6 +317,10 @@ class PromptCandidate(BaseModel):
         default_factory=list,
         description="Concrete improvements the refiner expects from this candidate.",
     )
+    directives_version: int = Field(
+        default=0,
+        description="Version of the refinement directives active when this candidate was generated.",
+    )
     created_at: datetime = Field(
         default_factory=_utc_now,
         description="UTC timestamp when the candidate was generated.",
@@ -336,6 +360,22 @@ class RefinementResult(BaseModel):
     feedback_summary: str = Field(
         default="",
         description="Statistical summary of the feedback batch that triggered this refinement.",
+    )
+    dimension_improvements: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-dimension expected improvements from this refinement.",
+    )
+    directives_respected: list[str] = Field(
+        default_factory=list,
+        description="List of developer directives this revision respects.",
+    )
+    behaviors_preserved: list[str] = Field(
+        default_factory=list,
+        description="List of preserved behaviors confirmed by the refiner.",
+    )
+    conflicts_detected: list[str] = Field(
+        default_factory=list,
+        description="Tensions between directives and feedback the refiner surfaced.",
     )
     created_at: datetime = Field(
         default_factory=_utc_now,
@@ -519,5 +559,21 @@ class ABTest(BaseModel):
     )
     result: str = Field(
         default="",
-        description="Outcome: 'promoted', 'rejected', 'superseded', or '' (still running).",
+        description="Outcome: 'promoted', 'rejected', 'superseded', 'mixed', or '' (still running).",
+    )
+    control_dimension_scores: dict[str, float] = Field(
+        default_factory=dict,
+        description="Running mean per dimension for control variant.",
+    )
+    candidate_dimension_scores: dict[str, float] = Field(
+        default_factory=dict,
+        description="Running mean per dimension for candidate variant.",
+    )
+    control_dimension_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="Signal count per dimension for control variant.",
+    )
+    candidate_dimension_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="Signal count per dimension for candidate variant.",
     )
