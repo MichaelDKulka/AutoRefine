@@ -50,9 +50,11 @@ def get_provider(
 
     Args:
         provider_name: Explicit provider (``"openai"``, ``"anthropic"``,
-            ``"mistral"``, ``"ollama"``).  When empty, the provider is
-            auto-detected from *model*.
+            ``"mistral"``, ``"ollama"``, ``"cloud"``).  When empty, the
+            provider is auto-detected from *model* or *api_key*.
         api_key: API key for the provider.  Not needed for Ollama.
+            Keys starting with ``ar_live_`` or ``ar_test_`` automatically
+            route through AutoRefine Cloud.
         model: Model identifier.  Used for auto-detection when
             *provider_name* is empty, and forwarded to the provider.
         **kwargs: Extra arguments forwarded to the provider constructor
@@ -65,6 +67,12 @@ def get_provider(
         ValueError: If the provider name is unrecognised.
         ImportError: If the required SDK package is not installed.
     """
+    # Detect AutoRefine Cloud keys before any other routing
+    if api_key and (api_key.startswith("ar_live_") or api_key.startswith("ar_test_")):
+        from autorefine.providers.cloud_provider import CloudProvider
+
+        return CloudProvider(api_key=api_key, model=model or "gpt-4o", **kwargs)
+
     name = provider_name or _detect_provider(model)
 
     if name == "openai":

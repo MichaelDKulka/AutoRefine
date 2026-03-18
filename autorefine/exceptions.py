@@ -103,3 +103,22 @@ class RollbackError(AutoRefineError):
     ) -> None:
         self.version = version
         super().__init__(message, version=version, **context)
+
+
+class SpendCapExceeded(AutoRefineError):
+    """The organization's monthly spend cap has been reached."""
+
+    def __init__(
+        self, message: str, current_spend: float = 0.0,
+        cap: float = 0.0, **context: object,
+    ) -> None:
+        self.current_spend = current_spend
+        self.cap = cap
+        super().__init__(message, current_spend=current_spend, cap=cap, **context)
+
+
+class CloudAuthError(AutoRefineError):
+    """AutoRefine Cloud API key is invalid, expired, or revoked."""
+
+    def __init__(self, message: str, **context: object) -> None:
+        super().__init__(message, **context)

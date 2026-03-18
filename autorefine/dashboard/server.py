@@ -200,6 +200,14 @@ def create_app(
     async def costs():
         return api.get_costs()
 
+    @app.get("/api/usage")
+    async def usage():
+        return api.get_usage_summary()
+
+    @app.get("/api/usage/daily")
+    async def usage_daily(days: int = Query(30, ge=1, le=365)):
+        return {"daily": api.get_daily_usage(days=days)}
+
     # ── Widget feedback endpoint (always public) ─────────────────────
 
     from autorefine.dashboard.widget_endpoint import WidgetFeedbackHandler

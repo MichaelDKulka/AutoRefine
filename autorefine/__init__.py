@@ -32,6 +32,7 @@ from autorefine.feedback import FeedbackBundle, FeedbackCollector
 from autorefine.feedback_filter import FeedbackFilter
 from autorefine.dimensions import FeedbackDimension, FeedbackDimensionSchema
 from autorefine.directives import RefinementDirectives
+from autorefine.exceptions import CloudAuthError, SpendCapExceeded
 from autorefine.feedback_provider import FeedbackProvider
 from autorefine.models import (
     CompletionResponse,
@@ -65,7 +66,10 @@ def _show_banner() -> None:
     if os.environ.get("AUTOREFINE_QUIET") or not sys.stderr.isatty():
         return
     sys.stderr.write(f"\033[34m{_BANNER}\033[0m")
-    sys.stderr.write(f"  \033[90mv{__version__} by Upwell Digital Solutions\033[0m\n\n")
+    sys.stderr.write(f"  \033[90mv{__version__} by Upwell Digital Solutions\033[0m\n")
+    if os.environ.get("AUTOREFINE_API_KEY", "").startswith("ar_"):
+        sys.stderr.write("  \033[32m+ Connected to AutoRefine Cloud\033[0m\n")
+    sys.stderr.write("\n")
 
 
 _show_banner()
@@ -156,6 +160,7 @@ def autorefine(
 __all__ = [
     "AsyncAutoRefine",
     "AutoRefine",
+    "CloudAuthError",
     "CompletionResponse",
     "FeedbackBundle",
     "FeedbackCollector",
@@ -173,6 +178,7 @@ __all__ = [
     "PromptChangeNotifier",
     "PromptVersion",
     "RefinementDirectives",
+    "SpendCapExceeded",
     "__version__",
     "autorefine",
 ]

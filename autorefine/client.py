@@ -57,7 +57,18 @@ class AutoRefine:
         self._cfg, self._prompt_key = cfg, prompt_key
 
         self._store = store or get_store(config=cfg)
-        self._provider = get_provider(cfg.detect_provider(), api_key=cfg.api_key, model=cfg.model)
+        self._cloud_mode = cfg.detect_cloud_mode()
+
+        if self._cloud_mode:
+            # Cloud mode: provider IS the cloud proxy, no separate refiner needed
+            self._provider = get_provider(
+                api_key=cfg.api_key, model=cfg.model,
+                base_url=cfg.cloud_base_url, timeout=cfg.cloud_timeout,
+            )
+            logger.info("AutoRefine Cloud mode: calls route through %s", cfg.cloud_base_url)
+        else:
+            self._provider = get_provider(cfg.detect_provider(), api_key=cfg.api_key, model=cfg.model)
+
         self._interceptor = Interceptor(provider=self._provider, store=self._store, prompt_key=prompt_key)
         self._cost_tracker = CostTracker(self._store, cfg.cost_limit_monthly)
         scrubber = PIIScrubber(enabled=cfg.pii_scrub_enabled)
@@ -82,7 +93,10 @@ class AutoRefine:
 
         self._refiner: Refiner | None = None
         self._ab: ABTestManager | None = None
-        if cfg.refiner_key:
+        if self._cloud_mode:
+            # Cloud handles refinement server-side — no local refiner needed
+            pass
+        elif cfg.refiner_key:
             self._refiner = Refiner(
                 refiner_provider=get_provider(cfg.refiner_provider, api_key=cfg.refiner_key, model=cfg.refiner_model),
                 store=self._store, prompt_key=prompt_key, batch_size=cfg.refine_batch_size,

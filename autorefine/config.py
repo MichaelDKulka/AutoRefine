@@ -236,6 +236,27 @@ class AutoRefineSettings(BaseSettings):
         ),
     )
 
+    # -- Cloud connection ---------------------------------------------------
+
+    cloud_base_url: str = Field(
+        default="https://api.autorefine.dev",
+        description="Base URL for AutoRefine Cloud API. Override for self-hosted cloud or development.",
+    )
+
+    cloud_sync_enabled: bool = Field(
+        default=True,
+        description=(
+            "When connected to AutoRefine Cloud, sync interactions and feedback "
+            "to the cloud store in the background. Disable for offline-first mode."
+        ),
+    )
+
+    cloud_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        description="Timeout in seconds for cloud proxy API calls.",
+    )
+
     # -- Dashboard security --------------------------------------------------
 
     cors_origins: str = Field(
@@ -260,6 +281,14 @@ class AutoRefineSettings(BaseSettings):
         default = pathlib.Path.home() / ".autorefine" / "store.json"
         default.parent.mkdir(parents=True, exist_ok=True)
         return str(default)
+
+    def detect_cloud_mode(self) -> bool:
+        """Return True if the api_key is an AutoRefine Cloud key."""
+        return self.api_key.startswith("ar_live_") or self.api_key.startswith("ar_test_")
+
+    def is_test_key(self) -> bool:
+        """Return True if using a test (sandbox) key."""
+        return self.api_key.startswith("ar_test_")
 
     def detect_provider(self) -> str:
         """Infer the provider name from the model identifier.

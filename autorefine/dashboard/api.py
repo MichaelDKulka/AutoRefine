@@ -205,3 +205,23 @@ class DashboardAPI:
     def get_costs(self) -> dict[str, Any]:
         summary = self._cost_tracker.summary()
         return summary
+
+    # ── Cloud usage methods (optional — no-op without cloud billing) ──
+
+    def get_usage_summary(self, org_id: str = "") -> dict[str, Any]:
+        """Current month's usage summary for the billing panel."""
+        return {
+            "org_id": org_id,
+            "monthly_spend": 0.0,
+            "monthly_cap": 0.0,
+            "utilization_pct": 0.0,
+            "cloud_mode": False,
+        }
+
+    def get_daily_usage(self, org_id: str = "", days: int = 30) -> list[dict[str, Any]]:
+        """Daily usage breakdown for the spend chart."""
+        return []
+
+    def get_model_breakdown(self, org_id: str = "", days: int = 30) -> dict[str, Any]:
+        """Usage breakdown by model for the pie chart."""
+        return {"models": {}, "total_calls": 0}
